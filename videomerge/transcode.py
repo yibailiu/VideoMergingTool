@@ -1,0 +1,156 @@
+from __future__ import annotations
+
+import logging
+import tempfile
+from pathlib import Path
+
+from .models import Canvas, CodecPlan, ToolPaths, VideoFile
+from .utils import run_command
+
+
+def preprocess_group(
+    files: list[VideoFile],
+    canvas: Canvas,
+    fps: float,
+    codec_plan: CodecPlan,
+    tools: ToolPaths,
+    logger: logging.Logger,
+    pad_color: str,
+    crf: int,
+    preset: str,
+    keep_temp: bool,
+    dry_run: bool,
+) -> tuple[list[Path], tempfile.TemporaryDirectory[str] | None]:
+    temp_owner = None if keep_temp else tempfile.TemporaryDirectory(prefix="videomerge_preprocess_")
+    temp_dir = Path(temp_owner.name) if temp_owner else Path(tempfile.mkdtemp(prefix="videomerge_preprocess_"))
+    logger.info("Preprocessing temp directory: %s", temp_dir)
+
+    outputs: list[Path] = []
+    for index, file in enumerate(files, start=1):
+        output_path = temp_dir / f"{index:04d}_{file.stem_safe}.mp4"
+        preprocess_file(
+            file=file,
+            output_path=output_path,
+            canvas=canvas,
+            fps=fps,
+            codec_plan=codec_plan,
+            tools=tools,
+            logger=logger,
+            pad_color=pad_color,
+            crf=crf,
+            preset=preset,
+            dry_run=dry_run,
+        )
+        outputs.append(output_path)
+
+    if keep_temp:
+        logger.info("Keeping temp files in %s", temp_dir)
+        return outputs, None
+    return outputs, temp_owner
+
+
+def preprocess_file(
+    file: VideoFile,
+    output_path: Path,
+    canvas: Canvas,
+    fps: float,
+    codec_plan: CodecPlan,
+    tools: ToolPaths,
+    logger: logging.Logger,
+    pad_color: str,
+    crf: int,
+    preset: str,
+    dry_run: bool,
+) -> None:
+    video_filter = build_video_filter(file.rotation, canvas, fps, pad_color)
+    args: list[str | Path] = [
+        tools.ffmpeg,
+        "-y",
+        "-hide_banner",
+        "-i",
+        file.path,
+    ]
+
+    if file.has_audio:
+        args.extend(
+            [
+                "-map",
+                "0:v:0",
+                "-map",
+                "0:a:0",
+            ]
+        )
+    else:
+        duration = max(file.duration, 0.1)
+        args.extend(
+            [
+                "-f",
+                "lavfi",
+                "-t",
+                f"{duration:.3f}",
+                "-i",
+                "anullsrc=channel_layout=stereo:sample_rate=48000",
+                "-map",
+                "0:v:0",
+                "-map",
+                "1:a:0",
+            ]
+        )
+        logger.info("Adding silent audio: %s", file.path.name)
+
+    args.extend(
+        [
+            "-vf",
+            video_filter,
+            "-map_metadata",
+            "-1",
+            "-c:v",
+            codec_plan.output_video_encoder,
+            "-crf",
+            str(crf),
+            "-preset",
+            preset,
+            "-pix_fmt",
+            "yuv420p",
+            "-c:a",
+            codec_plan.output_audio_encoder,
+            "-b:a",
+            "192k",
+            "-ar",
+            "48000",
+            "-ac",
+            "2",
+            "-shortest",
+            output_path,
+        ]
+    )
+    logger.info(
+        "Preprocess %s -> %s | canvas=%s fps=%.3f v=%s a=%s",
+        file.path.name,
+        output_path.name,
+        canvas.label,
+        fps,
+        codec_plan.output_video_encoder,
+        codec_plan.output_audio_encoder,
+    )
+    run_command(args, logger, dry_run=dry_run)
+
+
+def build_video_filter(rotation: int, canvas: Canvas, fps: float, pad_color: str) -> str:
+    filters: list[str] = []
+    if rotation == 90:
+        filters.append("transpose=1")
+    elif rotation == 270:
+        filters.append("transpose=2")
+    elif rotation == 180:
+        filters.append("transpose=2,transpose=2")
+
+    filters.extend(
+        [
+            f"scale=w={canvas.width}:h={canvas.height}:force_original_aspect_ratio=decrease",
+            f"pad={canvas.width}:{canvas.height}:(ow-iw)/2:(oh-ih)/2:color={pad_color}",
+            "setsar=1",
+            f"fps={fps:.3f}",
+        ]
+    )
+    return ",".join(filters)

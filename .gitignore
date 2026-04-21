@@ -1,0 +1,10 @@
+.venv/
+.tools/
+__pycache__/
+*.py[cod]
+.DS_Store
+merged/
+*.log
+dist/
+build/
+*.spec
