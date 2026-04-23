@@ -27,6 +27,18 @@ def root() -> None:
 
 
 @app.command()
+def gui() -> None:
+    """Launch the desktop GUI."""
+    try:
+        from .gui import launch_gui
+
+        launch_gui()
+    except RuntimeError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1) from exc
+
+
+@app.command()
 def merge(
     input_dir: Path = typer.Argument(..., help="Directory containing videos to merge."),
     mode: MergeMode = typer.Option(MergeMode.fast, "--mode", "-m", help="Merge mode."),

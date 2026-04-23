@@ -24,10 +24,22 @@
 Windows PowerShell 示例：
 
 ```powershell
+.\VideoMergingTool.exe gui
+```
+
+也可以直接使用命令行：
+
+```powershell
 .\VideoMergingTool.exe merge "F:\Videos" --mode fast
 ```
 
 macOS / Linux 示例：
+
+```bash
+./VideoMergingTool gui
+```
+
+命令行方式：
 
 ```bash
 ./VideoMergingTool merge ~/Videos --mode fast
@@ -52,6 +64,14 @@ pip install -r requirements.txt
 ```
 
 ## 基本用法
+
+启动 GUI：
+
+```bash
+python main.py gui
+```
+
+CLI 合并：
 
 ```bash
 python main.py merge /path/to/input --mode fast

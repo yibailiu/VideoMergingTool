@@ -18,6 +18,8 @@ rm -rf build
   --collect-all typer \
   --collect-all click \
   --collect-all rich \
+  --hidden-import videomerge.gui \
+  --hidden-import tkinter \
   main.py
 
 echo
