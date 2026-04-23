@@ -4,7 +4,9 @@ import logging
 import tempfile
 from pathlib import Path
 
+from .errors import CommandError, ProbeError
 from .models import Canvas, CodecPlan, ToolPaths, VideoFile
+from .probe import probe_file
 from .utils import run_command
 
 
@@ -68,6 +70,8 @@ def preprocess_file(
         "-y",
         "-hide_banner",
         "-noautorotate",
+        "-display_rotation:v:0",
+        "0",
         "-i",
         file.path,
     ]
@@ -142,6 +146,8 @@ def preprocess_file(
         codec_plan.output_audio_encoder,
     )
     run_command(args, logger, dry_run=dry_run)
+    if not dry_run:
+        validate_preprocessed_output(output_path, file, canvas, tools, logger)
 
 
 def build_video_filter(rotation: int, canvas: Canvas, fps: float, pad_color: str) -> str:
@@ -162,3 +168,35 @@ def build_video_filter(rotation: int, canvas: Canvas, fps: float, pad_color: str
         ]
     )
     return ",".join(filters)
+
+
+def validate_preprocessed_output(
+    output_path: Path,
+    source_file: VideoFile,
+    canvas: Canvas,
+    tools: ToolPaths,
+    logger: logging.Logger,
+) -> None:
+    try:
+        media = probe_file(output_path, tools, logger)
+    except ProbeError as exc:
+        raise CommandError(f"Could not validate preprocessed file {output_path}: {exc}") from exc
+
+    if media.rotation != 0:
+        raise CommandError(
+            f"Preprocessed file still has rotation metadata: {source_file.path.name} -> "
+            f"{output_path} rotation={media.rotation}"
+        )
+    if media.display_width != canvas.width or media.display_height != canvas.height:
+        raise CommandError(
+            f"Preprocessed file display size mismatch: {source_file.path.name} -> {output_path} "
+            f"display={media.display_width}x{media.display_height}, expected={canvas.label}"
+        )
+
+    logger.info(
+        "Validated preprocessed output: %s | display=%dx%d rotation=%d",
+        output_path.name,
+        media.display_width,
+        media.display_height,
+        media.rotation,
+    )
