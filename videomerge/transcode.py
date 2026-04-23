@@ -153,9 +153,9 @@ def preprocess_file(
 def build_video_filter(rotation: int, canvas: Canvas, fps: float, pad_color: str) -> str:
     filters: list[str] = []
     if rotation == 90:
-        filters.append("transpose=1")
-    elif rotation == 270:
         filters.append("transpose=2")
+    elif rotation == 270:
+        filters.append("transpose=1")
     elif rotation == 180:
         filters.append("transpose=2,transpose=2")
 

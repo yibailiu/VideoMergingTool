@@ -13,9 +13,14 @@ class TranscodeRotationTests(unittest.TestCase):
     def test_rotation_filter_outputs_portrait_canvas(self) -> None:
         video_filter = build_video_filter(90, Canvas(720, 1280), 30.0, "black")
 
-        self.assertTrue(video_filter.startswith("transpose=1,"))
+        self.assertTrue(video_filter.startswith("transpose=2,"))
         self.assertIn("scale=w=720:h=1280:force_original_aspect_ratio=decrease", video_filter)
         self.assertIn("pad=720:1280:(ow-iw)/2:(oh-ih)/2:color=black", video_filter)
+
+    def test_rotation_270_uses_opposite_transpose_direction(self) -> None:
+        video_filter = build_video_filter(270, Canvas(720, 1280), 30.0, "black")
+
+        self.assertTrue(video_filter.startswith("transpose=1,"))
 
     def test_preprocess_disables_ffmpeg_autorotate_and_clears_rotation_metadata(self) -> None:
         captured_args = []
@@ -60,7 +65,7 @@ class TranscodeRotationTests(unittest.TestCase):
         self.assertLess(captured_args.index("-noautorotate"), captured_args.index("-i"))
         self.assertLess(captured_args.index("-display_rotation:v:0"), captured_args.index("-i"))
         self.assertEqual(captured_args[captured_args.index("-display_rotation:v:0") + 1], "0")
-        self.assertIn("transpose=1", captured_args[captured_args.index("-vf") + 1])
+        self.assertIn("transpose=2", captured_args[captured_args.index("-vf") + 1])
         self.assertEqual(captured_args[captured_args.index("-metadata:s:v:0") + 1], "rotate=0")
 
     def test_validation_requires_canvas_display_size_and_zero_rotation(self) -> None:
