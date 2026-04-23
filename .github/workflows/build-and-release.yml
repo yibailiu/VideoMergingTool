@@ -1,0 +1,81 @@
+name: Build and Release
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            artifact_name: VideoMergingTool-windows-x64
+            binary_name: VideoMergingTool.exe
+          - os: macos-latest
+            artifact_name: VideoMergingTool-macos-arm64
+            binary_name: VideoMergingTool
+          - os: ubuntu-latest
+            artifact_name: VideoMergingTool-linux-x64
+            binary_name: VideoMergingTool
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install build dependencies
+        run: python -m pip install -r requirements-build.txt
+
+      - name: Build executable
+        run: pyinstaller --onefile --clean --name VideoMergingTool --collect-all typer --collect-all click --collect-all rich main.py
+
+      - name: Prepare artifact on Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force package
+          Copy-Item "dist\${{ matrix.binary_name }}" "package\${{ matrix.binary_name }}"
+          Copy-Item README.md package\
+          Compress-Archive -Path package\* -DestinationPath "${{ matrix.artifact_name }}.zip" -Force
+
+      - name: Prepare artifact on Unix
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          mkdir -p package
+          cp "dist/${{ matrix.binary_name }}" "package/${{ matrix.binary_name }}"
+          cp README.md package/
+          tar -czf "${{ matrix.artifact_name }}.tar.gz" -C package .
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: |
+            *.zip
+            *.tar.gz
+          if-no-files-found: error
+
+      - name: Upload release asset
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            *.zip
+            *.tar.gz
+          generate_release_notes: true

@@ -17,7 +17,25 @@
 - 支持控制台日志和文件日志
 - 支持 dry-run、覆盖、保留临时文件、自定义输出目录和文件名
 
-## 安装开发依赖
+## 普通用户用法
+
+推荐直接下载 GitHub Release 里的压缩包，解压后运行独立可执行文件。
+
+Windows PowerShell 示例：
+
+```powershell
+.\VideoMergingTool.exe merge "F:\Videos" --mode fast
+```
+
+macOS / Linux 示例：
+
+```bash
+./VideoMergingTool merge ~/Videos --mode fast
+```
+
+如果当前机器没有 FFmpeg / FFprobe，程序会默认尝试自动下载到当前运行目录的 `.tools/ffmpeg`。
+
+## 开发者运行方式
 
 ```bash
 python3 -m venv .venv
@@ -126,16 +144,58 @@ Extreme 模式对全部文件选择一个最终画布和编码策略，消解 ro
 
 如果网络不可用或下载源不可达，可以手动安装 FFmpeg，或用 `--ffmpeg-path` 和 `--ffprobe-path` 指定二进制路径。
 
-## 打包为独立可执行文件
+## 本地打包为独立可执行文件
 
-推荐使用 PyInstaller：
+Windows PowerShell:
 
-```bash
-pip install pyinstaller
-pyinstaller --onefile --name VideoMergingTool main.py
+```powershell
+.\scripts\build_windows.ps1
 ```
 
-生成文件位于 `dist/VideoMergingTool`。面向普通用户分发时，可以保留自动下载 FFmpeg 的逻辑，也可以把 FFmpeg/FFprobe 一起打包到应用目录。
+生成文件：
+
+```text
+dist\VideoMergingTool.exe
+```
+
+macOS / Linux:
+
+```bash
+bash scripts/build_local.sh
+```
+
+生成文件：
+
+```text
+dist/VideoMergingTool
+```
+
+## GitHub 自动打包和发布
+
+仓库包含 GitHub Actions workflow：
+
+```text
+.github/workflows/build-and-release.yml
+```
+
+自动行为：
+
+- 推送到 `main`：自动构建 Windows、macOS、Linux 三个平台的可执行文件，并上传到 Actions Artifacts
+- 推送版本 tag，例如 `v0.1.0`：自动构建三个平台，并创建 GitHub Release，附带压缩包
+- 手动触发 workflow：可在 GitHub Actions 页面点击 `Run workflow`
+
+发布新版本：
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+发布后，用户可以在 GitHub 仓库的 Releases 页面下载：
+
+- `VideoMergingTool-windows-x64.zip`
+- `VideoMergingTool-macos-arm64.tar.gz`
+- `VideoMergingTool-linux-x64.tar.gz`
 
 ## 平台说明
 
