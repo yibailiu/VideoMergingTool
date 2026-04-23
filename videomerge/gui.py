@@ -48,9 +48,11 @@ class VideoMergeGUI:
     def __init__(self) -> None:
         self.root = tk.Tk()
         self.root.title("VideoMergingTool")
-        self.root.geometry("1320x760")
-        self.root.minsize(1040, 640)
+        self.root.geometry("1440x820")
+        self.root.minsize(1180, 680)
         self.root.configure(bg=COLORS["bg"])
+        self._last_resize_width = 0
+        self.root.bind("<Configure>", self._on_resize)
 
         self.events: queue.Queue[tuple[str, object]] = queue.Queue()
         self.input_dir: Path | None = None
@@ -89,8 +91,8 @@ class VideoMergeGUI:
             foreground=COLORS["text"],
             fieldbackground=COLORS["panel"],
             bordercolor=COLORS["border"],
-            rowheight=30,
-            font=("Segoe UI", 10),
+            rowheight=28,
+            font=("Consolas", 9),
         )
         style.configure(
             "Files.Treeview.Heading",
@@ -114,8 +116,8 @@ class VideoMergeGUI:
 
         main = tk.Frame(self.root, bg=COLORS["bg"])
         main.pack(fill=tk.BOTH, expand=True)
-        main.columnconfigure(0, weight=1)
-        main.columnconfigure(1, weight=0, minsize=360)
+        main.columnconfigure(0, weight=1, minsize=720)
+        main.columnconfigure(1, weight=0, minsize=380)
         main.rowconfigure(0, weight=1)
 
         self.left = tk.Frame(main, bg=COLORS["bg"], highlightthickness=1, highlightbackground=COLORS["border"])
@@ -147,8 +149,9 @@ class VideoMergeGUI:
             header,
             bg=COLORS["panel"],
             fg=COLORS["secondary"],
-            bd=1,
-            relief=tk.SOLID,
+            bd=0,
+            highlightthickness=1,
+            highlightbackground=COLORS["border"],
             padx=12,
             pady=4,
             font=("Segoe UI", 9),
@@ -156,8 +159,8 @@ class VideoMergeGUI:
         self.ffmpeg_badge.pack(side=tk.RIGHT, padx=18)
 
     def _build_left_pane(self) -> None:
-        header = tk.Frame(self.left, bg=COLORS["bg"], height=76)
-        header.pack(fill=tk.X, padx=16, pady=(14, 8))
+        header = tk.Frame(self.left, bg=COLORS["bg"], height=78)
+        header.pack(fill=tk.X, padx=18, pady=(14, 8))
         header.columnconfigure(0, weight=1)
 
         tk.Label(header, text="Source Files", bg=COLORS["bg"], fg=COLORS["text"], font=("Segoe UI", 12, "bold")).grid(
@@ -178,7 +181,7 @@ class VideoMergeGUI:
         refresh_button.grid(row=0, column=2, rowspan=2, sticky="e")
 
         table_frame = tk.Frame(self.left, bg=COLORS["panel"], highlightthickness=1, highlightbackground=COLORS["border"])
-        table_frame.pack(fill=tk.BOTH, expand=True, padx=16, pady=(4, 12))
+        table_frame.pack(fill=tk.BOTH, expand=True, padx=18, pady=(4, 12))
         columns = ("filename", "resolution", "codec", "fps", "duration", "status")
         self.files_tree = ttk.Treeview(table_frame, columns=columns, show="headings", style="Files.Treeview")
         headings = {
@@ -190,16 +193,18 @@ class VideoMergeGUI:
             "status": "STATUS",
         }
         widths = {
-            "filename": 300,
+            "filename": 360,
             "resolution": 130,
             "codec": 120,
             "fps": 90,
             "duration": 90,
-            "status": 140,
+            "status": 150,
         }
         for col in columns:
             self.files_tree.heading(col, text=headings[col])
-            self.files_tree.column(col, width=widths[col], anchor=tk.W)
+            anchor = tk.W if col == "filename" else tk.CENTER
+            stretch = col == "filename"
+            self.files_tree.column(col, width=widths[col], minwidth=70, anchor=anchor, stretch=stretch)
         scrollbar = ttk.Scrollbar(table_frame, orient=tk.VERTICAL, command=self.files_tree.yview)
         self.files_tree.configure(yscrollcommand=scrollbar.set)
         self.files_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
@@ -207,9 +212,10 @@ class VideoMergeGUI:
         self.files_tree.tag_configure("group", background=COLORS["bg"], foreground=COLORS["secondary"])
         self.files_tree.tag_configure("ok", foreground=COLORS["green"])
         self.files_tree.tag_configure("warn", foreground=COLORS["yellow"])
+        self.files_tree.bind("<Configure>", self._resize_table_columns)
 
         self.plan_frame = tk.Frame(self.left, bg=COLORS["panel"], highlightthickness=1, highlightbackground=COLORS["border"])
-        self.plan_frame.pack(fill=tk.X, padx=16, pady=(0, 16))
+        self.plan_frame.pack(fill=tk.X, padx=18, pady=(0, 16))
         self.plan_title = tk.Label(
             self.plan_frame,
             text="OPTIMAL MODE SELECTED",
@@ -236,10 +242,10 @@ class VideoMergeGUI:
             bg=COLORS["panel"],
             fg=COLORS["text"],
             font=("Segoe UI", 12, "bold"),
-        ).pack(anchor="w", padx=16, pady=(18, 24))
+        ).pack(anchor="w", padx=18, pady=(18, 24))
 
         content = tk.Frame(self.right, bg=COLORS["panel"])
-        content.pack(fill=tk.BOTH, expand=True, padx=16)
+        content.pack(fill=tk.BOTH, expand=True, padx=18)
 
         self._section_label(content, "MERGE STRATEGY")
         self.mode_cards: dict[str, tk.Frame] = {}
@@ -278,7 +284,7 @@ class VideoMergeGUI:
         self._build_console(content)
 
         dock = tk.Frame(self.right, bg=COLORS["panel"], highlightthickness=1, highlightbackground=COLORS["border"])
-        dock.pack(fill=tk.X, side=tk.BOTTOM, padx=16, pady=16)
+        dock.pack(fill=tk.X, side=tk.BOTTOM, padx=18, pady=16)
         self.start_button = self._button(dock, "▷  START MERGE", self.start_merge, primary=True)
         self.start_button.pack(fill=tk.X, pady=8)
 
@@ -315,14 +321,20 @@ class VideoMergeGUI:
     def _mode_card(self, parent: tk.Widget, value: str, title: str, badge: str, desc: str) -> None:
         frame = tk.Frame(parent, bg=COLORS["bg"], highlightthickness=1, highlightbackground=COLORS["border"], cursor="hand2")
         frame.pack(fill=tk.X, pady=5)
-        frame.bind("<Button-1>", lambda _event, mode=value: self._set_mode(mode))
         top = tk.Frame(frame, bg=COLORS["bg"])
         top.pack(fill=tk.X, padx=12, pady=(10, 2))
-        tk.Label(top, text=title, bg=COLORS["bg"], fg=COLORS["text"], font=("Segoe UI", 10, "bold")).pack(side=tk.LEFT)
-        tk.Label(top, text=badge, bg=COLORS["panel_hover"], fg=COLORS["secondary"], font=("Segoe UI", 7, "bold")).pack(side=tk.RIGHT)
-        tk.Label(frame, text=desc, bg=COLORS["bg"], fg=COLORS["secondary"], justify=tk.LEFT, wraplength=310, font=("Segoe UI", 9)).pack(
+        title_label = tk.Label(top, text=title, bg=COLORS["bg"], fg=COLORS["text"], font=("Segoe UI", 10, "bold"))
+        title_label.pack(side=tk.LEFT)
+        badge_label = tk.Label(top, text=badge, bg=COLORS["panel_hover"], fg=COLORS["secondary"], font=("Segoe UI", 7, "bold"))
+        badge_label.pack(side=tk.RIGHT)
+        desc_label = tk.Label(frame, text=desc, bg=COLORS["bg"], fg=COLORS["secondary"], justify=tk.LEFT, wraplength=310, font=("Segoe UI", 9))
+        desc_label.pack(
             anchor="w", padx=12, pady=(0, 10)
         )
+        for widget in (frame, top, title_label, badge_label, desc_label):
+            widget.bind("<Button-1>", lambda _event, mode=value: self._set_mode(mode))
+            widget.bind("<Enter>", lambda _event, card=frame: self._hover_card(card, True))
+            widget.bind("<Leave>", lambda _event, card=frame: self._hover_card(card, False))
         self.mode_cards[value] = frame
 
     def _labeled_entry(self, parent: tk.Widget, label: str, variable: tk.StringVar) -> None:
@@ -339,9 +351,9 @@ class VideoMergeGUI:
 
     def _check(self, parent: tk.Widget, title: str, desc: str, variable: tk.BooleanVar) -> None:
         row = tk.Frame(parent, bg=COLORS["panel"], highlightthickness=1, highlightbackground=COLORS["border"])
-        row.pack(fill=tk.X, pady=5)
+        row.pack(fill=tk.X, pady=5, ipady=2)
         text = tk.Frame(row, bg=COLORS["panel"])
-        text.pack(side=tk.LEFT, padx=0, pady=8)
+        text.pack(side=tk.LEFT, padx=8, pady=8)
         tk.Label(text, text=title, bg=COLORS["panel"], fg=COLORS["text"], font=("Segoe UI", 9)).pack(anchor="w")
         tk.Label(text, text=desc, bg=COLORS["panel"], fg=COLORS["muted"], font=("Segoe UI", 8)).pack(anchor="w")
         tk.Checkbutton(
@@ -361,26 +373,47 @@ class VideoMergeGUI:
         primary: bool = False,
         secondary: bool = False,
         icon: bool = False,
-    ) -> tk.Button:
+    ) -> tk.Frame:
         bg = COLORS["text"] if primary else COLORS["bg"]
         fg = COLORS["bg"] if primary else COLORS["text"]
         if icon:
             fg = COLORS["secondary"]
-        return tk.Button(
+        if secondary:
+            bg = COLORS["bg"]
+            fg = COLORS["text"]
+        frame = tk.Frame(
             parent,
+            bg=bg,
+            highlightthickness=0 if primary else 1,
+            highlightbackground=COLORS["border"],
+            cursor="hand2",
+        )
+        label = tk.Label(
+            frame,
             text=text,
-            command=command,
             bg=bg,
             fg=fg,
-            activebackground=COLORS["panel_hover"],
-            activeforeground=fg,
-            relief=tk.FLAT if primary else tk.SOLID,
-            bd=0 if primary else 1,
-            padx=14 if not icon else 8,
-            pady=8,
+            padx=18 if not icon else 10,
+            pady=10 if primary else 8,
             font=("Segoe UI", 9, "bold" if primary else "normal"),
             cursor="hand2",
         )
+        label.pack(fill=tk.BOTH, expand=True)
+
+        def on_enter(_event: tk.Event) -> None:
+            hover_bg = "#EDEDEA" if primary else COLORS["panel_hover"]
+            frame.configure(bg=hover_bg)
+            label.configure(bg=hover_bg)
+
+        def on_leave(_event: tk.Event) -> None:
+            frame.configure(bg=bg)
+            label.configure(bg=bg)
+
+        for widget in (frame, label):
+            widget.bind("<Button-1>", lambda _event: command())
+            widget.bind("<Enter>", on_enter)
+            widget.bind("<Leave>", on_leave)
+        return frame
 
     def _set_mode(self, mode: str) -> None:
         self.mode_var.set(mode)
@@ -390,7 +423,25 @@ class VideoMergeGUI:
     def _refresh_mode_cards(self) -> None:
         for value, frame in self.mode_cards.items():
             active = value == self.mode_var.get()
-            frame.configure(highlightbackground=COLORS["red"] if active else COLORS["border"])
+            frame.configure(
+                bg=COLORS["bg"],
+                highlightbackground=COLORS["red"] if active else COLORS["border"],
+                highlightthickness=1,
+            )
+            self._set_descendant_bg(frame, COLORS["bg"])
+
+    def _hover_card(self, frame: tk.Frame, hovering: bool) -> None:
+        if frame is self.mode_cards.get(self.mode_var.get()):
+            return
+        color = COLORS["panel_hover"] if hovering else COLORS["bg"]
+        frame.configure(bg=color)
+        self._set_descendant_bg(frame, color)
+
+    def _set_descendant_bg(self, widget: tk.Widget, color: str) -> None:
+        for child in widget.winfo_children():
+            if isinstance(child, (tk.Frame, tk.Label)):
+                child.configure(bg=color)
+            self._set_descendant_bg(child, color)
 
     def select_folder(self) -> None:
         folder = filedialog.askdirectory(title="Select source video folder")
@@ -603,6 +654,27 @@ class VideoMergeGUI:
         value = max(0, min(value, 100))
         self.progress.configure(value=value)
         self.progress_label.configure(text=f"{value}%")
+
+    def _on_resize(self, _event: tk.Event) -> None:
+        width = self.root.winfo_width()
+        if abs(width - self._last_resize_width) < 16:
+            return
+        self._last_resize_width = width
+        self.root.after_idle(lambda: self._resize_table_columns(None))
+
+    def _resize_table_columns(self, _event: tk.Event | None) -> None:
+        table_width = max(self.files_tree.winfo_width() - 24, 760)
+        fixed = {
+            "resolution": 132,
+            "codec": 118,
+            "fps": 88,
+            "duration": 86,
+            "status": 150,
+        }
+        filename_width = max(table_width - sum(fixed.values()), 260)
+        self.files_tree.column("filename", width=filename_width)
+        for column, width in fixed.items():
+            self.files_tree.column(column, width=width)
 
     def _log(self, message: str) -> None:
         stamp = time.strftime("%H:%M:%S")
