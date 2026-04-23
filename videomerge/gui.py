@@ -533,7 +533,10 @@ HTML = r"""<!doctype html>
     async function selectFolder(kind) {
       try {
         const result = await api(`/pick-folder?kind=${kind}`);
-        if (!result.path) return;
+        if (!result.path) {
+          log("Folder selection was cancelled or is unavailable on this system.");
+          return;
+        }
         if (kind === "source") {
           state.inputDir = result.path;
           await scan();
@@ -1031,9 +1034,14 @@ def _gui_logger(state: GuiState) -> logging.Logger:
 
 
 def _pick_folder(kind: str) -> str:
-    script = 'POSIX path of (choose folder with prompt "{}")'.format(
-        "Select output folder" if kind == "output" else "Select source video folder"
-    )
+    title = "Select output folder" if kind == "output" else "Select source video folder"
+    if platform.system() == "Darwin":
+        return _pick_folder_macos(title)
+    return _pick_folder_tk(title)
+
+
+def _pick_folder_macos(title: str) -> str:
+    script = 'POSIX path of (choose folder with prompt "{}")'.format(title)
     try:
         result = subprocess.run(
             ["osascript", "-e", script],
@@ -1048,6 +1056,22 @@ def _pick_folder(kind: str) -> str:
     except Exception:
         return ""
     return ""
+
+
+def _pick_folder_tk(title: str) -> str:
+    try:
+        import tkinter as tk
+        from tkinter import filedialog
+
+        root = tk.Tk()
+        root.withdraw()
+        root.attributes("-topmost", True)
+        root.update()
+        selected = filedialog.askdirectory(title=title, mustexist=True, parent=root)
+        root.destroy()
+        return selected or ""
+    except Exception:
+        return ""
 
 
 def _free_port() -> int:
