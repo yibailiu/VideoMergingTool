@@ -135,6 +135,11 @@ def merge(
         if not results:
             raise VideoMergeError("No outputs were produced. Check skip reasons in the log.")
 
+        _log_merge_summary(
+            total_video_count=len(paths),
+            merged_video_count=sum(len(result.files) for result in results),
+            logger=logger,
+        )
         logger.info("Completed %d output file(s):", len(results))
         for result in results:
             logger.info("  %s", result.output_path)
@@ -157,6 +162,16 @@ def _validate_cli(input_dir: Path, output_format: str, fps_policy: str, resoluti
         raise VideoMergeError("Invalid --fps-policy. Use majority, max, or min.")
     if resolution_policy != "largest":
         raise VideoMergeError("Only --resolution-policy largest is currently supported.")
+
+
+def _log_merge_summary(total_video_count: int, merged_video_count: int, logger: logging.Logger) -> None:
+    unmerged_video_count = max(total_video_count - merged_video_count, 0)
+    logger.info(
+        "Summary: directory contains %d video(s), %d video(s) were merged, %d video(s) were not merged.",
+        total_video_count,
+        merged_video_count,
+        unmerged_video_count,
+    )
 
 
 def _run_fast(
