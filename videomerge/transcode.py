@@ -67,6 +67,7 @@ def preprocess_file(
         tools.ffmpeg,
         "-y",
         "-hide_banner",
+        "-noautorotate",
         "-i",
         file.path,
     ]
@@ -104,6 +105,8 @@ def preprocess_file(
             video_filter,
             "-map_metadata",
             "-1",
+            "-metadata:s:v:0",
+            "rotate=0",
             "-c:v",
             codec_plan.output_video_encoder,
             "-crf",
@@ -125,9 +128,14 @@ def preprocess_file(
         ]
     )
     logger.info(
-        "Preprocess %s -> %s | canvas=%s fps=%.3f v=%s a=%s",
+        "Preprocess %s -> %s | source=%dx%d display=%dx%d rotation=%d canvas=%s fps=%.3f v=%s a=%s",
         file.path.name,
         output_path.name,
+        file.width,
+        file.height,
+        file.display_width,
+        file.display_height,
+        file.rotation,
         canvas.label,
         fps,
         codec_plan.output_video_encoder,
