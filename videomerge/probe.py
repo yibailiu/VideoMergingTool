@@ -22,13 +22,22 @@ def probe_file(path: Path, tools: ToolPaths, logger: logging.Logger) -> VideoFil
         "-show_streams",
         str(path),
     ]
-    process = subprocess.run(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    process = subprocess.run(
+        args,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
     if process.returncode != 0:
         raise ProbeError(process.stderr.strip() or f"ffprobe failed for {path}")
+    if not process.stdout:
+        raise ProbeError(f"ffprobe returned no JSON for {path}")
 
     try:
         payload = json.loads(process.stdout)
-    except json.JSONDecodeError as exc:
+    except (TypeError, json.JSONDecodeError) as exc:
         raise ProbeError(f"Invalid ffprobe JSON for {path}: {exc}") from exc
 
     streams = payload.get("streams", [])

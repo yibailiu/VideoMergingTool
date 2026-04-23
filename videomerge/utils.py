@@ -21,6 +21,8 @@ def run_command(args: Sequence[str | Path], logger: logging.Logger, dry_run: boo
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
+        encoding="utf-8",
+        errors="replace",
     )
     if process.returncode != 0:
         if process.stdout.strip():
