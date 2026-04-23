@@ -112,10 +112,23 @@ input_dir                         输入目录
 --audio-codec TEXT                指定目标音频 codec
 --crf INT                         转码质量，默认 20
 --preset TEXT                     编码 preset，默认 medium
+--gpu off|auto|nvenc|qsv|amf|videotoolbox
+                                  转码模式使用 GPU 硬件编码加速，默认 off
 --ffmpeg-path PATH                指定 ffmpeg
 --ffprobe-path PATH               指定 ffprobe
 --auto-download-deps / --no-auto-download-deps
 ```
+
+## GPU 加速
+
+GPU 加速只作用于需要转码的 `optimal` / `extreme` 模式，`fast` 模式仍然使用无损 stream copy。
+
+- Windows：`--gpu auto` 按 NVIDIA NVENC、Intel QSV、AMD AMF 的顺序选择可用编码器。
+- macOS：`--gpu auto` 使用 FFmpeg 的 VideoToolbox 编码器（`h264_videotoolbox` / `hevc_videotoolbox`）。
+- Linux：`--gpu auto` 优先 NVENC，其次 QSV。
+- 如果目标视频编码不是 H.264/HEVC，或者当前 FFmpeg 没有对应硬件编码器，会自动回退 CPU 编码并写入日志。
+
+macOS 的 VideoToolbox 不支持 libx264 风格的 CRF 控制，工具会把 `--crf` 映射为码率区间；数值越低仍表示质量越高、文件越大。
 
 ## 三种模式说明
 

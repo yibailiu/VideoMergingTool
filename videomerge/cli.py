@@ -10,6 +10,7 @@ import typer
 from .env_check import resolve_tools
 from .errors import CommandError, DependencyError, VideoMergeError
 from .grouping import choose_canvas, choose_fps, group_fast, majority_codec_plan, split_by_orientation
+from .gpu import GpuMode, apply_gpu_encoder, resolve_gpu_plan
 from .logger import setup_logging
 from .merge import concat_copy, warn_container_compatibility
 from .models import CodecPlan, MergeMode, MergeResult, Orientation, VideoFile
@@ -57,6 +58,7 @@ def merge(
     audio_codec: Optional[str] = typer.Option(None, "--audio-codec", help="Override target audio codec."),
     crf: int = typer.Option(20, "--crf", min=0, max=51, help="Video CRF for transcode modes."),
     preset: str = typer.Option("medium", "--preset", help="FFmpeg encoder preset."),
+    gpu: GpuMode = typer.Option(GpuMode.off, "--gpu", help="GPU acceleration: off, auto, nvenc, qsv, amf, videotoolbox."),
     ffmpeg_path: Optional[Path] = typer.Option(None, "--ffmpeg-path", help="Explicit ffmpeg path."),
     ffprobe_path: Optional[Path] = typer.Option(None, "--ffprobe-path", help="Explicit ffprobe path."),
     auto_download_deps: bool = typer.Option(
@@ -123,6 +125,7 @@ def merge(
                 audio_codec=audio_codec,
                 crf=crf,
                 preset=preset,
+                gpu=gpu,
             )
         else:
             results = _run_extreme(
@@ -142,6 +145,7 @@ def merge(
                 audio_codec=audio_codec,
                 crf=crf,
                 preset=preset,
+                gpu=gpu,
             )
 
         if not results:
@@ -241,6 +245,7 @@ def _run_optimal(
     audio_codec: str | None,
     crf: int,
     preset: str,
+    gpu: GpuMode,
 ) -> list[MergeResult]:
     logger.info("Mode: optimal. Files will be split into landscape and portrait outputs.")
     codec_plan = _container_adjusted_plan(
@@ -248,6 +253,8 @@ def _run_optimal(
         output_format,
         logger,
     )
+    gpu_plan = resolve_gpu_plan(tools, gpu, codec_plan.video_codec, logger)
+    codec_plan = apply_gpu_encoder(codec_plan, gpu_plan)
     logger.info("Target codecs by file-count majority: video=%s audio=%s", codec_plan.video_codec, codec_plan.audio_codec)
     groups = split_by_orientation(media_files)
     results: list[MergeResult] = []
@@ -273,6 +280,7 @@ def _run_optimal(
             preset=preset,
             keep_temp=keep_temp,
             dry_run=dry_run,
+            gpu_plan=gpu_plan,
         )
         if owner:
             temp_owners.append(owner)
@@ -305,6 +313,7 @@ def _run_extreme(
     audio_codec: str | None,
     crf: int,
     preset: str,
+    gpu: GpuMode,
 ) -> list[MergeResult]:
     logger.info("Mode: extreme. All files will be normalized into one output.")
     codec_plan = _container_adjusted_plan(
@@ -312,6 +321,8 @@ def _run_extreme(
         output_format,
         logger,
     )
+    gpu_plan = resolve_gpu_plan(tools, gpu, codec_plan.video_codec, logger)
+    codec_plan = apply_gpu_encoder(codec_plan, gpu_plan)
     canvas = choose_canvas(media_files)
     fps = choose_fps(media_files, fps_policy)
     logger.info(
@@ -334,6 +345,7 @@ def _run_extreme(
         preset=preset,
         keep_temp=keep_temp,
         dry_run=dry_run,
+        gpu_plan=gpu_plan,
     )
     base_name = name or auto_name(input_dir.name, "extreme", canvas.label)
     output_path = unique_output_path(output_dir, base_name, output_format, overwrite)

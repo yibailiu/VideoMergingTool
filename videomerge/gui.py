@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import logging
 import os
+import platform
+import signal
 import socket
 import subprocess
 import sys
@@ -16,6 +18,7 @@ from urllib.parse import parse_qs, urlparse
 
 from .env_check import resolve_tools
 from .grouping import group_fast, split_by_orientation
+from .gpu import detect_ffmpeg_encoders
 from .models import MergeMode, Orientation, VideoFile
 from .probe import probe_files
 from .scanner import scan_video_files
@@ -139,6 +142,10 @@ HTML = r"""<!doctype html>
       border-radius: var(--radius-pill);
       font-weight: 800;
       padding: 14px 24px;
+    }
+    .btn-primary.stop {
+      background: var(--accent-red);
+      color: var(--text-primary);
     }
     .table-wrap {
       margin: 24px;
@@ -402,6 +409,8 @@ HTML = r"""<!doctype html>
           <select id="format"><option>mp4</option><option>mkv</option><option>mov</option><option>avi</option><option>ts</option><option>webm</option></select>
           <div class="field-label label-micro">Target Video Codec <span class="info" data-tip="Maps to --video-codec. Leave at h264 for broad compatibility.">i</span></div>
           <select id="codec"><option value="">Auto majority</option><option>h264</option><option>hevc</option><option>vp9</option><option>av1</option><option>mpeg4</option></select>
+          <div class="field-label label-micro">GPU Acceleration <span class="info" data-tip="Maps to --gpu. auto chooses the native encoder for the OS: Windows NVENC/QSV/AMF, macOS VideoToolbox. Unsupported codecs or missing encoders fall back to CPU.">i</span></div>
+          <select id="gpu"><option value="off">off</option><option value="auto">auto</option><option value="nvenc">nvenc</option><option value="qsv">qsv</option><option value="amf">amf</option><option value="videotoolbox">videotoolbox (macOS)</option></select>
           <div class="field-label label-micro">Target Audio Codec <span class="info" data-tip="Maps to --audio-codec. Leave empty to use majority vote, defaulting to AAC when needed.">i</span></div>
           <select id="audioCodec"><option value="">Auto majority</option><option>aac</option><option>mp3</option><option>opus</option><option>vorbis</option><option>pcm_s16le</option></select>
           <div class="num-row">
@@ -432,7 +441,7 @@ HTML = r"""<!doctype html>
   </main>
   <div class="tooltip" id="tooltip"></div>
   <script>
-    const state = { mode: "optimal", inputDir: "", files: [] };
+    const state = { mode: "optimal", inputDir: "", files: [], running: false, statusTimer: null };
     const $ = (id) => document.getElementById(id);
     function log(message) {
       const stamp = new Date().toTimeString().slice(0, 8);
@@ -443,6 +452,12 @@ HTML = r"""<!doctype html>
       const clamped = Math.max(0, Math.min(100, value));
       $("progressText").textContent = `${clamped}%`;
       $("bar").style.width = `${clamped}%`;
+    }
+    function setRunning(running) {
+      state.running = running;
+      const button = $("startMerge");
+      button.textContent = running ? "■ STOP MERGE" : "▷ START MERGE";
+      button.classList.toggle("stop", running);
     }
     async function api(path, body) {
       const response = await fetch(path, {
@@ -543,6 +558,10 @@ HTML = r"""<!doctype html>
       }
     }
     async function merge() {
+      if (state.running) {
+        await cancelMerge();
+        return;
+      }
       if (!state.inputDir) {
         await selectFolder("source");
         if (!state.inputDir) return;
@@ -557,6 +576,7 @@ HTML = r"""<!doctype html>
           output_dir: $("outputDir").value,
           output_format: $("format").value,
           video_codec: $("codec").value,
+          gpu: $("gpu").value,
           audio_codec: $("audioCodec").value,
           crf: Number($("crf").value),
           preset: $("preset").value,
@@ -571,16 +591,31 @@ HTML = r"""<!doctype html>
           keep_temp: $("keepTemp").checked,
           auto_download_deps: $("autoDownloadDeps").checked
         });
+        setRunning(true);
         log(`Command: ${payload.command.join(" ")}`);
-        const timer = setInterval(async () => {
+        if (state.statusTimer) clearInterval(state.statusTimer);
+        state.statusTimer = setInterval(async () => {
           const status = await api("/status");
           $("logs").textContent = status.logs.join("\n") + (status.logs.length ? "\n" : "");
           $("logs").scrollTop = $("logs").scrollHeight;
           progress(status.progress);
-          if (!status.running) clearInterval(timer);
+          setRunning(status.running);
+          if (!status.running) {
+            clearInterval(state.statusTimer);
+            state.statusTimer = null;
+          }
         }, 500);
       } catch (error) {
         progress(0);
+        setRunning(false);
+        log(`ERROR: ${error.message}`);
+      }
+    }
+    async function cancelMerge() {
+      try {
+        log("Stopping current merge task...");
+        await api("/cancel", {});
+      } catch (error) {
         log(`ERROR: ${error.message}`);
       }
     }
@@ -627,6 +662,8 @@ class GuiState:
         self.logs: list[str] = []
         self.progress = 0
         self.running = False
+        self.cancel_requested = False
+        self.process: subprocess.Popen[str] | None = None
         self.lock = threading.Lock()
 
     def log(self, message: str) -> None:
@@ -642,6 +679,41 @@ class GuiState:
     def snapshot(self) -> dict[str, object]:
         with self.lock:
             return {"logs": list(self.logs), "progress": self.progress, "running": self.running}
+
+    def begin_run(self) -> bool:
+        with self.lock:
+            if self.running:
+                return False
+            self.logs.clear()
+            self.progress = 4
+            self.running = True
+            self.cancel_requested = False
+            self.process = None
+            return True
+
+    def start_process(self, process: subprocess.Popen[str]) -> bool:
+        with self.lock:
+            self.process = process
+            return self.cancel_requested
+
+    def cancel_running_process(self) -> bool:
+        with self.lock:
+            process = self.process
+            if not self.running:
+                return False
+            self.cancel_requested = True
+            if process is None or process.poll() is not None:
+                return True
+        _terminate_process(process)
+        return True
+
+    def finish_process(self) -> bool:
+        with self.lock:
+            was_cancelled = self.cancel_requested
+            self.process = None
+            self.running = False
+            self.cancel_requested = False
+            return was_cancelled
 
 
 class QueueLogHandler(logging.Handler):
@@ -704,18 +776,31 @@ def _make_handler(state: GuiState):
             if parsed.path == "/merge":
                 self._merge(payload)
                 return
+            if parsed.path == "/cancel":
+                self._cancel()
+                return
             self._send_json({"error": "Not found"}, HTTPStatus.NOT_FOUND)
 
         def _deps(self) -> None:
             try:
                 logger = _gui_logger(state)
                 tools = resolve_tools(logger, True, Path.cwd() / ".tools" / "ffmpeg")
+                encoders = detect_ffmpeg_encoders(tools)
+                gpu_encoders = sorted(
+                    encoder
+                    for encoder in encoders
+                    if encoder.endswith(("_nvenc", "_qsv", "_amf", "_videotoolbox"))
+                )
+                recommended_gpu = _recommended_gpu_mode(gpu_encoders)
                 self._send_json(
                     {
                         "ok": True,
-                        "message": f"FFmpeg ready: {tools.ffmpeg}",
+                        "message": f"FFmpeg ready: {tools.ffmpeg}. GPU encoders: {', '.join(gpu_encoders) if gpu_encoders else 'none detected'}. Recommended GPU mode: {recommended_gpu}.",
                         "ffmpeg": str(tools.ffmpeg),
                         "ffprobe": str(tools.ffprobe),
+                        "gpu_encoders": gpu_encoders,
+                        "gpu_recommended": recommended_gpu,
+                        "platform": platform.system(),
                     }
                 )
             except Exception as exc:
@@ -740,15 +825,18 @@ def _make_handler(state: GuiState):
                 self._send_json({"error": str(exc)}, HTTPStatus.INTERNAL_SERVER_ERROR)
 
         def _merge(self, payload: dict[str, object]) -> None:
-            if state.running:
+            if not state.begin_run():
                 self._send_json({"error": "A merge is already running."}, HTTPStatus.CONFLICT)
                 return
             command = _build_merge_command(payload)
-            state.logs.clear()
-            state.set_progress(4)
-            state.running = True
             threading.Thread(target=_run_merge, args=(command, state), daemon=True).start()
             self._send_json({"command": command})
+
+        def _cancel(self) -> None:
+            if state.cancel_running_process():
+                self._send_json({"ok": True, "message": "Stop requested."})
+            else:
+                self._send_json({"ok": False, "message": "No merge task is running."})
 
         def _read_json(self) -> dict[str, object]:
             length = int(self.headers.get("Content-Length", "0"))
@@ -798,6 +886,22 @@ def _serialize_files(files: list[VideoFile]) -> list[dict[str, object]]:
     return output
 
 
+def _recommended_gpu_mode(gpu_encoders: list[str]) -> str:
+    available = set(gpu_encoders)
+    system = platform.system()
+    if system == "Darwin" and {"h264_videotoolbox", "hevc_videotoolbox"} & available:
+        return "auto"
+    if system == "Windows":
+        for encoder in ("h264_nvenc", "hevc_nvenc", "h264_qsv", "hevc_qsv", "h264_amf", "hevc_amf"):
+            if encoder in available:
+                return "auto"
+    if system == "Linux":
+        for encoder in ("h264_nvenc", "hevc_nvenc", "h264_qsv", "hevc_qsv"):
+            if encoder in available:
+                return "auto"
+    return "off"
+
+
 def _build_merge_command(payload: dict[str, object]) -> list[str]:
     if getattr(sys, "frozen", False):
         cmd = [sys.executable, "merge", str(payload["input_dir"])]
@@ -812,6 +916,8 @@ def _build_merge_command(payload: dict[str, object]) -> list[str]:
         cmd.extend(["--output-dir", str(payload["output_dir"])])
     if payload.get("video_codec"):
         cmd.extend(["--video-codec", str(payload["video_codec"])])
+    if payload.get("gpu"):
+        cmd.extend(["--gpu", str(payload["gpu"])])
     if payload.get("audio_codec"):
         cmd.extend(["--audio-codec", str(payload["audio_codec"])])
     cmd.extend(["--crf", str(payload.get("crf") or 20)])
@@ -850,7 +956,10 @@ def _run_merge(command: list[str], state: GuiState) -> None:
             text=True,
             encoding="utf-8",
             errors="replace",
+            **_process_group_kwargs(),
         )
+        if state.start_process(process):
+            _terminate_process(process)
         assert process.stdout is not None
         for line in process.stdout:
             stripped = line.rstrip()
@@ -865,7 +974,10 @@ def _run_merge(command: list[str], state: GuiState) -> None:
             elif "output written" in lowered:
                 state.set_progress(92)
         code = process.wait()
-        if code == 0:
+        was_cancelled = state.finish_process()
+        if was_cancelled:
+            state.log("Merge stopped by user.")
+        elif code == 0:
             state.set_progress(100)
             state.log("Merge completed.")
         else:
@@ -873,7 +985,38 @@ def _run_merge(command: list[str], state: GuiState) -> None:
     except Exception as exc:
         state.log(f"ERROR: {exc}")
     finally:
-        state.running = False
+        state.finish_process()
+
+
+def _terminate_process(process: subprocess.Popen[str]) -> None:
+    try:
+        if os.name == "nt":
+            subprocess.run(
+                ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=False,
+            )
+        else:
+            os.killpg(process.pid, signal.SIGTERM)
+        try:
+            process.wait(timeout=3)
+        except subprocess.TimeoutExpired:
+            if os.name == "nt":
+                process.kill()
+            else:
+                os.killpg(process.pid, signal.SIGKILL)
+    except Exception:
+        try:
+            process.kill()
+        except Exception:
+            pass
+
+
+def _process_group_kwargs() -> dict[str, object]:
+    if os.name == "nt":
+        return {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
+    return {"start_new_session": True}
 
 
 def _gui_logger(state: GuiState) -> logging.Logger:
