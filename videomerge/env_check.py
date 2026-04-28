@@ -114,7 +114,40 @@ def _find_binary(name: str, tools_dir: Path) -> Path | None:
     if local.exists():
         return local
     found = shutil.which(name)
-    return Path(found) if found else None
+    if found:
+        return Path(found)
+    for candidate in _system_binary_candidates(name):
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def _system_binary_candidates(name: str) -> list[Path]:
+    if platform.system() == "Darwin":
+        return [
+            Path("/opt/homebrew/bin") / name,
+            Path("/usr/local/bin") / name,
+            Path("/opt/local/bin") / name,
+            Path("/usr/bin") / name,
+        ]
+    if platform.system() == "Windows":
+        local_name = f"{name}.exe"
+        candidates: list[Path] = []
+        for root in (os.environ.get("ProgramFiles"), os.environ.get("ProgramFiles(x86)")):
+            if root:
+                candidates.extend(
+                    [
+                        Path(root) / "ffmpeg" / "bin" / local_name,
+                        Path(root) / "FFmpeg" / "bin" / local_name,
+                    ]
+                )
+        return candidates
+    return [
+        Path("/usr/local/bin") / name,
+        Path("/usr/bin") / name,
+        Path("/bin") / name,
+        Path("/snap/bin") / name,
+    ]
 
 
 def _download(url: str, output: Path, logger: logging.Logger) -> None:
