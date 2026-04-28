@@ -16,9 +16,10 @@ def concat_copy(
     mode: MergeMode,
     overwrite: bool,
     dry_run: bool,
+    temp_root: Path | None = None,
 ) -> MergeResult:
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix="videomerge_concat_") as temp_dir:
+    with tempfile.TemporaryDirectory(prefix="videomerge_concat_", dir=temp_root) as temp_dir:
         list_path = Path(temp_dir) / "concat.txt"
         write_concat_list(files, list_path)
         logger.info("Merge order:")

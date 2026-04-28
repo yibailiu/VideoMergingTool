@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import tempfile
 from pathlib import Path
+from typing import Callable
 
 from .errors import CommandError, ProbeError
 from .gpu import GpuPlan, gpu_encoder_quality_args
@@ -24,9 +25,15 @@ def preprocess_group(
     keep_temp: bool,
     dry_run: bool,
     gpu_plan: GpuPlan | None = None,
+    temp_root: Path | None = None,
+    progress_callback: Callable[[VideoFile], None] | None = None,
 ) -> tuple[list[Path], tempfile.TemporaryDirectory[str] | None]:
-    temp_owner = None if keep_temp else tempfile.TemporaryDirectory(prefix="videomerge_preprocess_")
-    temp_dir = Path(temp_owner.name) if temp_owner else Path(tempfile.mkdtemp(prefix="videomerge_preprocess_"))
+    temp_owner = (
+        None
+        if keep_temp
+        else tempfile.TemporaryDirectory(prefix="videomerge_preprocess_", dir=temp_root)
+    )
+    temp_dir = Path(temp_owner.name) if temp_owner else Path(tempfile.mkdtemp(prefix="videomerge_preprocess_", dir=temp_root))
     logger.info("Preprocessing temp directory: %s", temp_dir)
 
     outputs: list[Path] = []
@@ -47,6 +54,8 @@ def preprocess_group(
             gpu_plan=gpu_plan,
         )
         outputs.append(output_path)
+        if progress_callback:
+            progress_callback(file)
 
     if keep_temp:
         logger.info("Keeping temp files in %s", temp_dir)

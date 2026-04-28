@@ -25,7 +25,7 @@ jobs:
             binary_name: VideoMergingTool.exe
           - os: macos-latest
             artifact_name: VideoMergingTool-macos-arm64
-            binary_name: VideoMergingTool
+            binary_name: VideoMergingTool.app
           - os: ubuntu-latest
             artifact_name: VideoMergingTool-linux-x64
             binary_name: VideoMergingTool
@@ -42,8 +42,17 @@ jobs:
       - name: Install build dependencies
         run: python -m pip install -r requirements-build.txt
 
-      - name: Build executable
-        run: pyinstaller --onefile --clean --name VideoMergingTool --collect-all typer --collect-all click --collect-all rich --hidden-import videomerge.gui --hidden-import tkinter main.py
+      - name: Build executable on Windows
+        if: runner.os == 'Windows'
+        run: pyinstaller --onefile --windowed --clean --noconfirm --name VideoMergingTool --icon assets/icons/VideoMergingTool.ico --collect-all typer --collect-all click --collect-all rich --collect-all webview --hidden-import videomerge.gui --hidden-import tkinter main.py
+
+      - name: Build app on macOS
+        if: runner.os == 'macOS'
+        run: pyinstaller --windowed --clean --noconfirm --name VideoMergingTool --icon assets/icons/VideoMergingTool.icns --collect-all typer --collect-all click --collect-all rich --collect-all webview --hidden-import videomerge.gui --hidden-import tkinter main.py
+
+      - name: Build executable on Linux
+        if: runner.os == 'Linux'
+        run: pyinstaller --onefile --windowed --clean --noconfirm --name VideoMergingTool --icon assets/icons/VideoMergingTool.png --collect-all typer --collect-all click --collect-all rich --collect-all webview --hidden-import videomerge.gui --hidden-import tkinter main.py
 
       - name: Prepare artifact on Windows
         if: runner.os == 'Windows'
@@ -55,13 +64,19 @@ jobs:
           Compress-Archive -Path package\* -DestinationPath "${{ matrix.artifact_name }}.zip" -Force
 
       - name: Prepare artifact on Unix
-        if: runner.os != 'Windows'
+        if: runner.os == 'Linux'
         shell: bash
         run: |
           mkdir -p package
           cp "dist/${{ matrix.binary_name }}" "package/${{ matrix.binary_name }}"
           cp README.md package/
           tar -czf "${{ matrix.artifact_name }}.tar.gz" -C package .
+
+      - name: Prepare artifact on macOS
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          hdiutil create -volname VideoMergingTool -srcfolder "dist/VideoMergingTool.app" -ov -format UDZO "${{ matrix.artifact_name }}.dmg"
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
@@ -70,6 +85,7 @@ jobs:
           path: |
             *.zip
             *.tar.gz
+            *.dmg
           if-no-files-found: error
 
       - name: Upload release asset
@@ -79,4 +95,5 @@ jobs:
           files: |
             *.zip
             *.tar.gz
+            *.dmg
           generate_release_notes: true

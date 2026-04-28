@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import logging
+import os
 import platform
 import shutil
 import stat
+import sys
 import tarfile
 import urllib.request
 import zipfile
@@ -31,6 +33,21 @@ DOWNLOADS = {
         "ffprobe_member": "ffprobe",
     },
 }
+
+
+def default_tools_dir() -> Path:
+    if not getattr(sys, "frozen", False):
+        return Path.cwd() / ".tools" / "ffmpeg"
+
+    system = platform.system()
+    if system == "Darwin":
+        base = Path.home() / "Library" / "Application Support" / "VideoMergingTool"
+    elif system == "Windows":
+        base = Path(os.environ.get("LOCALAPPDATA") or os.environ.get("APPDATA") or Path.home() / "AppData" / "Local")
+        base = base / "VideoMergingTool"
+    else:
+        base = Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local" / "share") / "VideoMergingTool"
+    return base / ".tools" / "ffmpeg"
 
 
 def resolve_tools(

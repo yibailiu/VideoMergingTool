@@ -1,8 +1,10 @@
 # VideoMergingTool
 
-本地批量视频智能合并工具。当前版本优先提供 CLI，内部模块按扫描、探测、分组、转码、合并拆分，后续可以扩展 GUI。
+![VideoMergingTool icon](assets/icons/VideoMergingTool.png)
 
-底层依赖 FFmpeg / FFprobe。程序启动时会优先查找系统已有二进制；缺失时默认尝试下载安装到项目目录 `.tools/ffmpeg`，避免普通用户手动配置环境变量。
+本地批量视频智能合并工具。当前版本提供可点击启动的桌面 GUI，同时保留 CLI；内部模块按扫描、探测、分组、转码、合并拆分。
+
+底层依赖 FFmpeg / FFprobe。程序启动时会优先查找已下载的本地二进制和系统已有二进制；缺失时默认尝试下载安装到可写目录，避免普通用户手动配置环境变量。
 
 ## 功能
 
@@ -16,36 +18,33 @@
 - 转码模式只允许旋转、缩放、补边，不裁切
 - 支持控制台日志和文件日志
 - 支持 dry-run、覆盖、保留临时文件、自定义输出目录和文件名
+- 桌面 GUI 使用内嵌窗口，不依赖外部浏览器打开
 
 ## 普通用户用法
 
-推荐直接下载 GitHub Release 里的压缩包，解压后运行独立可执行文件。
+推荐直接下载 GitHub Release 里的安装包或压缩包。
 
-Windows PowerShell 示例：
+- Windows：运行 `VideoMergingTool.exe`，或使用 `VideoMergingTool-Setup.exe` 安装后从开始菜单/桌面图标启动。
+- macOS：打开 `VideoMergingTool.dmg`，将 `VideoMergingTool.app` 拖入 Applications 后从图标启动。
+- Linux：解压后运行 `VideoMergingTool`。
 
-```powershell
-.\VideoMergingTool.exe gui
-```
+桌面应用和安装包会使用 `assets/icons/VideoMergingTool.*` 中的应用图标。
 
-也可以直接使用命令行：
+打包后的桌面应用无参数启动时会直接打开 GUI，不需要命令行，也不会调用外部浏览器。
+
+仍然可以直接使用命令行：
 
 ```powershell
 .\VideoMergingTool.exe merge "F:\Videos" --mode fast
 ```
 
-macOS / Linux 示例：
-
-```bash
-./VideoMergingTool gui
-```
-
-命令行方式：
+macOS / Linux CLI 示例：
 
 ```bash
 ./VideoMergingTool merge ~/Videos --mode fast
 ```
 
-如果当前机器没有 FFmpeg / FFprobe，程序会默认尝试自动下载到当前运行目录的 `.tools/ffmpeg`。
+如果当前机器没有 FFmpeg / FFprobe，程序会默认尝试自动下载。源码运行时下载到当前运行目录的 `.tools/ffmpeg`；打包后的桌面应用会下载到用户可写的应用数据目录，避免 macOS app 只读目录报错。
 
 ## 开发者运行方式
 
@@ -102,8 +101,10 @@ input_dir                         输入目录
 --output-format mp4|mkv|mov|avi|ts|webm
 --name TEXT                       自定义输出文件名，不含扩展名
 --recursive / --no-recursive      是否递归扫描，默认递归
+--sort-by TEXT                    合并排序，默认 name-natural-asc
 --overwrite                       覆盖已有输出文件
 --keep-temp                       保留转码中间文件
+--temp-dir PATH                   自定义临时目录，默认使用系统临时目录
 --log-file PATH                   写入详细文件日志
 --dry-run                         只打印流程和命令，不执行 FFmpeg
 --pad-color TEXT                  补边颜色，默认 black
@@ -118,6 +119,8 @@ input_dir                         输入目录
 --ffprobe-path PATH               指定 ffprobe
 --auto-download-deps / --no-auto-download-deps
 ```
+
+`--sort-by` 可选值：`name-natural-asc`、`name-natural-desc`、`name-asc`、`name-desc`、`modified-asc`、`modified-desc`、`size-asc`、`size-desc`。
 
 ## GPU 加速
 
@@ -165,9 +168,9 @@ Extreme 模式对全部文件选择一个最终画布和编码策略，消解 ro
 
 默认行为：
 
-1. 查找 `./.tools/ffmpeg`
+1. 查找本地工具目录。源码运行时是 `./.tools/ffmpeg`，打包应用是用户应用数据目录。
 2. 查找系统 `PATH`
-3. 如果缺失，尝试下载静态 FFmpeg/FFprobe 到 `./.tools/ffmpeg`
+3. 如果缺失，尝试下载静态 FFmpeg/FFprobe。源码运行时使用 `./.tools/ffmpeg`，打包应用使用用户应用数据目录。
 
 自动下载地址按平台选择：
 
@@ -189,6 +192,7 @@ Windows PowerShell:
 
 ```text
 dist\VideoMergingTool.exe
+dist\installer\VideoMergingTool-Setup.exe   # 已安装 Inno Setup 时生成
 ```
 
 macOS / Linux:
@@ -200,7 +204,9 @@ bash scripts/build_local.sh
 生成文件：
 
 ```text
-dist/VideoMergingTool
+dist/VideoMergingTool.app   # macOS
+dist/VideoMergingTool.dmg   # macOS 安装镜像
+dist/VideoMergingTool       # Linux
 ```
 
 ## GitHub 自动打包和发布

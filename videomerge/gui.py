@@ -4,19 +4,19 @@ import json
 import logging
 import os
 import platform
+import re
 import signal
 import socket
 import subprocess
 import sys
 import threading
 import time
-import webbrowser
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from .env_check import resolve_tools
+from .env_check import default_tools_dir, resolve_tools
 from .grouping import group_fast, split_by_orientation
 from .gpu import detect_ffmpeg_encoders
 from .models import MergeMode, Orientation, VideoFile
@@ -57,9 +57,8 @@ HTML = r"""<!doctype html>
       color: var(--text-primary);
       font-family: var(--font-sans);
       font-size: 14px;
-      height: 100vh;
-      min-width: 1180px;
-      min-height: 720px;
+      min-height: 100vh;
+      min-width: 900px;
       overflow: hidden;
       -webkit-font-smoothing: antialiased;
     }
@@ -84,24 +83,26 @@ HTML = r"""<!doctype html>
       border-radius: var(--radius-pill);
       padding: 4px 12px;
       font-size: 12px;
+      min-height: 28px;
     }
+    button.dep-badge:hover { background: var(--bg-panel-hover); border-color: var(--border-focus); }
     .main {
       display: grid;
-      grid-template-columns: minmax(760px, 1fr) 420px;
+      grid-template-columns: minmax(520px, 1fr) minmax(340px, clamp(360px, 32vw, 480px));
       height: calc(100vh - 56px);
-      min-height: 664px;
+      min-height: 560px;
     }
     .left {
       border-right: 1px solid var(--border-subtle);
       display: grid;
-      grid-template-rows: 86px minmax(240px, 1fr) auto 78px;
+      grid-template-rows: auto minmax(180px, 1fr) minmax(160px, 32vh) minmax(88px, auto);
       min-width: 0;
       overflow: hidden;
     }
     .right {
       background: var(--bg-panel);
       display: grid;
-      grid-template-rows: 66px minmax(0, 1fr) 84px;
+      grid-template-rows: auto minmax(0, 1fr) auto;
       overflow: hidden;
     }
     .pane-header {
@@ -119,7 +120,7 @@ HTML = r"""<!doctype html>
       letter-spacing: .08em;
       font-weight: 800;
     }
-    .summary { margin-top: 12px; }
+    .summary { margin-top: 8px; }
     .toolbar { display: flex; gap: 8px; align-items: center; }
     button {
       font: inherit;
@@ -148,7 +149,7 @@ HTML = r"""<!doctype html>
       color: var(--text-primary);
     }
     .table-wrap {
-      margin: 24px;
+      margin: clamp(12px, 2vw, 24px);
       margin-bottom: 12px;
       border: 1px solid var(--border-subtle);
       border-radius: var(--radius-panel);
@@ -190,7 +191,7 @@ HTML = r"""<!doctype html>
     .status-ok { color: var(--accent-green); }
     .status-warn { color: var(--accent-yellow); }
     .console {
-      margin: 0 24px 12px;
+      margin: 0 clamp(12px, 2vw, 24px) 12px;
       background: #0A0A0A;
       border: 1px solid #1A1A1A;
       border-radius: var(--radius-panel);
@@ -199,10 +200,9 @@ HTML = r"""<!doctype html>
       display: grid;
       grid-template-rows: 18px minmax(0, 1fr) 4px;
       gap: 8px;
-      height: 230px;
+      height: 100%;
       min-height: 150px;
-      max-height: 42vh;
-      resize: vertical;
+      max-height: none;
       overflow: hidden;
     }
     .console-head { display: flex; justify-content: space-between; }
@@ -217,7 +217,7 @@ HTML = r"""<!doctype html>
     .bar { height: 4px; background: #222; border-radius: 2px; overflow: hidden; }
     .bar-fill { height: 100%; width: 0%; background: var(--accent-red); transition: width .2s; }
     .plan {
-      margin: 0 24px 18px;
+      margin: 0 clamp(12px, 2vw, 24px) 18px;
       border: 1px solid var(--border-subtle);
       border-radius: var(--radius-panel);
       background: var(--bg-panel);
@@ -342,23 +342,43 @@ HTML = r"""<!doctype html>
     .toggle-text { min-width: 0; }
     .toggle small { display: block; color: var(--text-muted); margin-top: 3px; }
     .dock { padding: 18px 24px; border-top: 1px solid var(--border-subtle); }
+    .header-actions { display: flex; align-items: center; gap: 10px; }
+    .language-select {
+      width: auto;
+      min-width: 118px;
+      padding: 6px 28px 6px 10px;
+      font-size: 12px;
+      font-weight: 700;
+    }
+    @media (max-width: 1040px) {
+      body { min-width: 720px; overflow: auto; }
+      .main { grid-template-columns: 1fr; height: auto; min-height: calc(100vh - 56px); }
+      .left { border-right: 0; border-bottom: 1px solid var(--border-subtle); min-height: 620px; }
+      .right { min-height: 560px; }
+    }
   </style>
 </head>
 <body>
   <header>
     <div class="logo">VIDEO MERGE <span class="logo-dot"></span></div>
-    <div class="dep-badge" id="ffmpegStatus">! FFmpeg Not Checked</div>
+    <div class="header-actions">
+      <select class="language-select" id="languageSelect" title="Switch language">
+        <option value="en">English</option>
+        <option value="zh">简体中文</option>
+      </select>
+      <button class="dep-badge" id="ffmpegStatus" type="button"></button>
+    </div>
   </header>
   <main class="main">
     <section class="left">
       <div class="pane-header">
         <div>
-          <h2>Source Files</h2>
-          <div class="label-micro summary" id="summary">No folder selected</div>
+          <h2 data-i18n="sourceFiles">Source Files</h2>
+          <div class="label-micro summary" id="summary" data-i18n="noFolderSelected">No folder selected</div>
         </div>
         <div class="toolbar">
-          <button id="selectSource">Select Folder</button>
-          <button class="btn-icon" id="refresh">↻</button>
+          <button id="selectSource" data-i18n="selectFolder">Select Folder</button>
+          <button class="btn-icon" id="refresh" title="Refresh">↻</button>
         </div>
       </div>
       <div class="table-wrap">
@@ -373,76 +393,212 @@ HTML = r"""<!doctype html>
           </colgroup>
           <thead>
             <tr>
-              <th>Filename</th><th>Resolution</th><th>Codec</th><th>FPS</th><th>Dur</th><th>Status</th>
+              <th data-i18n="filename">Filename</th><th data-i18n="resolution">Resolution</th><th data-i18n="codec">Codec</th><th>FPS</th><th data-i18n="duration">Dur</th><th data-i18n="status">Status</th>
             </tr>
           </thead>
           <tbody id="fileRows"></tbody>
         </table>
       </div>
       <div class="console">
-        <div class="console-head"><span class="label-micro">Process Console</span><span class="label-micro" id="progressText">0%</span></div>
+        <div class="console-head"><span class="label-micro" data-i18n="processConsole">Process Console</span><span class="label-micro" id="progressText">0%</span></div>
         <div class="logs" id="logs"></div>
         <div class="bar"><div class="bar-fill" id="bar"></div></div>
       </div>
       <div class="plan">
-        <div class="label-micro plan-title" id="planTitle">Optimal Mode Selected</div>
-        <div class="plan-text" id="planText">Select a folder to preview the merge plan.</div>
+        <div class="label-micro plan-title" id="planTitle"></div>
+        <div class="plan-text" id="planText"></div>
       </div>
     </section>
     <aside class="right">
-      <h2 class="config-title">Configuration</h2>
+      <h2 class="config-title" data-i18n="configuration">Configuration</h2>
       <div class="config-scroll">
-        <h3>Merge Strategy</h3>
+        <h3 data-i18n="mergeStrategy">Merge Strategy</h3>
         <div class="mode-list">
-          <div class="mode-card" data-mode="fast"><div class="mode-head"><span class="mode-title">Fast Merge</span><span class="badge fast">Lossless</span></div><div class="mode-desc">Stream copy only. Skips incompatible groups.</div></div>
-          <div class="mode-card active" data-mode="optimal"><div class="mode-head"><span class="mode-title">Optimal Merge</span><span class="badge opt">Smart</span></div><div class="mode-desc">Groups by orientation and transcodes when needed.</div></div>
-          <div class="mode-card" data-mode="extreme"><div class="mode-head"><span class="mode-title">Extreme Merge</span><span class="badge extreme">Brute Force</span></div><div class="mode-desc">Normalizes all files into one output.</div></div>
+          <div class="mode-card" data-mode="fast"><div class="mode-head"><span class="mode-title" data-i18n="fastMerge">Fast Merge</span><span class="badge fast" data-i18n="lossless">Lossless</span></div><div class="mode-desc" data-i18n="fastDesc">Stream copy only. Skips incompatible groups.</div></div>
+          <div class="mode-card active" data-mode="optimal"><div class="mode-head"><span class="mode-title" data-i18n="optimalMerge">Optimal Merge</span><span class="badge opt" data-i18n="smart">Smart</span></div><div class="mode-desc" data-i18n="optimalDesc">Groups by orientation and transcodes when needed.</div></div>
+          <div class="mode-card" data-mode="extreme"><div class="mode-head"><span class="mode-title" data-i18n="extremeMerge">Extreme Merge</span><span class="badge extreme" data-i18n="bruteForce">Brute Force</span></div><div class="mode-desc" data-i18n="extremeDesc">Normalizes all files into one output.</div></div>
         </div>
         <div class="section">
-          <h3>Output Settings</h3>
-          <div class="field-label label-micro">Output Filename Prefix <span class="info" data-tip="Maps to --name. Leave empty to use automatic names based on folder, mode, and resolution.">i</span></div>
+          <h3 data-i18n="outputSettings">Output Settings</h3>
+          <div class="field-label label-micro"><span data-i18n="outputFilenamePrefix">Output Filename Prefix</span> <span class="info" data-tip-i18n="tipName">i</span></div>
           <input id="name" value="Merged_Output">
-          <div class="field-label label-micro">Output Folder <span class="info" data-tip="Maps to --output-dir. Leave empty to create/use a merged folder under the source directory.">i</span></div>
-          <div class="folder-row"><input id="outputDir" placeholder=""><button id="selectOutput">Browse</button></div>
-          <div class="hint">Leave empty to use the default merged folder under the source directory.</div>
-          <div class="field-label label-micro">Output Format <span class="info" data-tip="Maps to --output-format. Supported containers: mp4, mkv, mov, avi, ts, webm.">i</span></div>
+          <div class="field-label label-micro"><span data-i18n="outputFolder">Output Folder</span> <span class="info" data-tip-i18n="tipOutputDir">i</span></div>
+          <div class="folder-row"><input id="outputDir" placeholder=""><button id="selectOutput" data-i18n="browse">Browse</button></div>
+          <div class="hint" data-i18n="outputDirHint">Leave empty to use the default merged folder under the source directory.</div>
+          <div class="field-label label-micro"><span data-i18n="tempFolder">Temp Folder</span> <span class="info" data-tip-i18n="tipTempDir">i</span></div>
+          <div class="folder-row"><input id="tempDir" placeholder=""><button id="selectTemp" data-i18n="browse">Browse</button></div>
+          <div class="hint" data-i18n="tempDirHint">Leave empty to use the system default temp directory.</div>
+          <div class="field-label label-micro"><span data-i18n="outputFormat">Output Format</span> <span class="info" data-tip-i18n="tipOutputFormat">i</span></div>
           <select id="format"><option>mp4</option><option>mkv</option><option>mov</option><option>avi</option><option>ts</option><option>webm</option></select>
-          <div class="field-label label-micro">Target Video Codec <span class="info" data-tip="Maps to --video-codec. Leave at h264 for broad compatibility.">i</span></div>
+          <div class="field-label label-micro"><span data-i18n="mergeSortOrder">Merge Sort Order</span> <span class="info" data-tip-i18n="tipSortOrder">i</span></div>
+          <select id="sortBy">
+            <option value="name-natural-asc" data-i18n="sortNameNaturalAsc">Filename natural (A-Z)</option>
+            <option value="name-natural-desc" data-i18n="sortNameNaturalDesc">Filename natural (Z-A)</option>
+            <option value="name-asc" data-i18n="sortNameAsc">Filename text (A-Z)</option>
+            <option value="name-desc" data-i18n="sortNameDesc">Filename text (Z-A)</option>
+            <option value="modified-asc" data-i18n="sortModifiedAsc">Modified time (oldest first)</option>
+            <option value="modified-desc" data-i18n="sortModifiedDesc">Modified time (newest first)</option>
+            <option value="size-asc" data-i18n="sortSizeAsc">File size (smallest first)</option>
+            <option value="size-desc" data-i18n="sortSizeDesc">File size (largest first)</option>
+          </select>
+          <div class="field-label label-micro"><span data-i18n="targetVideoCodec">Target Video Codec</span> <span class="info" data-tip-i18n="tipVideoCodec">i</span></div>
           <select id="codec"><option value="">Auto majority</option><option>h264</option><option>hevc</option><option>vp9</option><option>av1</option><option>mpeg4</option></select>
-          <div class="field-label label-micro">GPU Acceleration <span class="info" data-tip="Maps to --gpu. auto chooses the native encoder for the OS: Windows NVENC/QSV/AMF, macOS VideoToolbox. Unsupported codecs or missing encoders fall back to CPU.">i</span></div>
+          <div class="field-label label-micro"><span data-i18n="gpuAcceleration">GPU Acceleration</span> <span class="info" data-tip-i18n="tipGpu">i</span></div>
           <select id="gpu"><option value="off">off</option><option value="auto">auto</option><option value="nvenc">nvenc</option><option value="qsv">qsv</option><option value="amf">amf</option><option value="videotoolbox">videotoolbox (macOS)</option></select>
-          <div class="field-label label-micro">Target Audio Codec <span class="info" data-tip="Maps to --audio-codec. Leave empty to use majority vote, defaulting to AAC when needed.">i</span></div>
+          <div class="field-label label-micro"><span data-i18n="targetAudioCodec">Target Audio Codec</span> <span class="info" data-tip-i18n="tipAudioCodec">i</span></div>
           <select id="audioCodec"><option value="">Auto majority</option><option>aac</option><option>mp3</option><option>opus</option><option>vorbis</option><option>pcm_s16le</option></select>
           <div class="num-row">
-            <div><div class="field-label label-micro">CRF (Quality) <span class="info" data-tip="Maps to --crf. Lower means better quality and larger files. Common values: 18 high quality, 20 balanced, 23 smaller.">i</span></div><div class="hint">Lower = better</div></div>
+            <div><div class="field-label label-micro"><span data-i18n="crfQuality">CRF (Quality)</span> <span class="info" data-tip-i18n="tipCrf">i</span></div><div class="hint" data-i18n="lowerBetter">Lower = better</div></div>
             <input id="crf" type="number" min="0" max="51" value="20">
           </div>
-          <div class="field-label label-micro">Preset <span class="info" data-tip="Maps to --preset. Slower presets usually produce smaller files at the same CRF but take longer.">i</span></div>
+          <div class="field-label label-micro"><span data-i18n="preset">Preset</span> <span class="info" data-tip-i18n="tipPreset">i</span></div>
           <select id="preset"><option>ultrafast</option><option>superfast</option><option>veryfast</option><option>faster</option><option>fast</option><option selected>medium</option><option>slow</option><option>slower</option><option>veryslow</option></select>
-          <div class="field-label label-micro">FPS Policy <span class="info" data-tip="Maps to --fps-policy. majority uses the most common FPS, max/min choose the highest/lowest FPS in the group.">i</span></div>
+          <div class="field-label label-micro"><span data-i18n="fpsPolicy">FPS Policy</span> <span class="info" data-tip-i18n="tipFpsPolicy">i</span></div>
           <select id="fpsPolicy"><option>majority</option><option>max</option><option>min</option></select>
-          <div class="field-label label-micro">Resolution Policy <span class="info" data-tip="Maps to --resolution-policy. Currently only largest is supported.">i</span></div>
+          <div class="field-label label-micro"><span data-i18n="resolutionPolicy">Resolution Policy</span> <span class="info" data-tip-i18n="tipResolutionPolicy">i</span></div>
           <select id="resolutionPolicy"><option>largest</option></select>
-          <div class="field-label label-micro">Pad Color <span class="info" data-tip="Maps to --pad-color. Used when videos are scaled into a canvas without cropping.">i</span></div>
+          <div class="field-label label-micro"><span data-i18n="padColor">Pad Color</span> <span class="info" data-tip-i18n="tipPadColor">i</span></div>
           <input id="padColor" value="black">
-          <div class="field-label label-micro">FFmpeg Path <span class="info" data-tip="Maps to --ffmpeg-path. Optional explicit path to ffmpeg binary.">i</span></div>
+          <div class="field-label label-micro"><span data-i18n="ffmpegPath">FFmpeg Path</span> <span class="info" data-tip-i18n="tipFfmpegPath">i</span></div>
           <input id="ffmpegPath" placeholder="Optional">
-          <div class="field-label label-micro">FFprobe Path <span class="info" data-tip="Maps to --ffprobe-path. Optional explicit path to ffprobe binary.">i</span></div>
+          <div class="field-label label-micro"><span data-i18n="ffprobePath">FFprobe Path</span> <span class="info" data-tip-i18n="tipFfprobePath">i</span></div>
           <input id="ffprobePath" placeholder="Optional">
-          <div class="toggle"><div class="toggle-text"><span class="toggle-title">Recursive Scan <span class="info" data-tip="Maps to --recursive / --no-recursive. When enabled, scans subfolders.">i</span></span></div><input id="recursive" type="checkbox" checked></div>
-          <div class="toggle"><div class="toggle-text"><span class="toggle-title">Overwrite <span class="info" data-tip="Maps to --overwrite. Replace existing output files instead of appending a numeric suffix.">i</span></span></div><input id="overwrite" type="checkbox"></div>
-          <div class="toggle"><div class="toggle-text"><span class="toggle-title">Dry Run <span class="info" data-tip="Maps to --dry-run. Prints commands and plan without running FFmpeg.">i</span></span></div><input id="dryRun" type="checkbox"></div>
-          <div class="toggle"><div class="toggle-text"><span class="toggle-title">Keep Temp Files <span class="info" data-tip="Maps to --keep-temp. Keeps preprocessed intermediate files for inspection.">i</span></span></div><input id="keepTemp" type="checkbox"></div>
-          <div class="toggle"><div class="toggle-text"><span class="toggle-title">Auto Download Deps <span class="info" data-tip="Maps to --auto-download-deps / --no-auto-download-deps. Attempts to download ffmpeg/ffprobe when missing.">i</span></span></div><input id="autoDownloadDeps" type="checkbox" checked></div>
+          <div class="toggle"><div class="toggle-text"><span class="toggle-title"><span data-i18n="recursiveScan">Recursive Scan</span> <span class="info" data-tip-i18n="tipRecursive">i</span></span></div><input id="recursive" type="checkbox" checked></div>
+          <div class="toggle"><div class="toggle-text"><span class="toggle-title"><span data-i18n="overwrite">Overwrite</span> <span class="info" data-tip-i18n="tipOverwrite">i</span></span></div><input id="overwrite" type="checkbox"></div>
+          <div class="toggle"><div class="toggle-text"><span class="toggle-title"><span data-i18n="dryRun">Dry Run</span> <span class="info" data-tip-i18n="tipDryRun">i</span></span></div><input id="dryRun" type="checkbox"></div>
+          <div class="toggle"><div class="toggle-text"><span class="toggle-title"><span data-i18n="keepTempFiles">Keep Temp Files</span> <span class="info" data-tip-i18n="tipKeepTemp">i</span></span></div><input id="keepTemp" type="checkbox"></div>
+          <div class="toggle"><div class="toggle-text"><span class="toggle-title"><span data-i18n="autoDownloadDeps">Auto Download Deps</span> <span class="info" data-tip-i18n="tipAutoDownload">i</span></span></div><input id="autoDownloadDeps" type="checkbox" checked></div>
         </div>
       </div>
-      <div class="dock"><button class="btn-primary" id="startMerge">▷ START MERGE</button></div>
+      <div class="dock"><button class="btn-primary" id="startMerge"></button></div>
     </aside>
   </main>
   <div class="tooltip" id="tooltip"></div>
   <script>
-    const state = { mode: "optimal", inputDir: "", files: [], running: false, statusTimer: null };
+    const messages = {
+      en: {
+        ffmpegNotChecked: "! FFmpeg Not Checked", ffmpegChecking: "... Checking FFmpeg", ffmpegInstalled: "✓ FFmpeg Installed", ffmpegMissing: "! FFmpeg Missing", refreshFfmpeg: "Refresh FFmpeg check",
+        sourceFiles: "Source Files", noFolderSelected: "No folder selected", selectFolder: "Select Folder", filename: "Filename", resolution: "Resolution", codec: "Codec", duration: "Dur", status: "Status",
+        processConsole: "Process Console", configuration: "Configuration", mergeStrategy: "Merge Strategy", outputSettings: "Output Settings", browse: "Browse",
+        fastMerge: "Fast Merge", optimalMerge: "Optimal Merge", extremeMerge: "Extreme Merge", lossless: "Lossless", smart: "Smart", bruteForce: "Brute Force",
+        fastDesc: "Stream copy only. Skips incompatible groups.", optimalDesc: "Groups by orientation and transcodes when needed.", extremeDesc: "Normalizes all files into one output.",
+        outputFilenamePrefix: "Output Filename Prefix", outputFolder: "Output Folder", tempFolder: "Temp Folder", outputFormat: "Output Format", mergeSortOrder: "Merge Sort Order", targetVideoCodec: "Target Video Codec",
+        gpuAcceleration: "GPU Acceleration", targetAudioCodec: "Target Audio Codec", crfQuality: "CRF (Quality)", lowerBetter: "Lower = better", preset: "Preset",
+        fpsPolicy: "FPS Policy", resolutionPolicy: "Resolution Policy", padColor: "Pad Color", ffmpegPath: "FFmpeg Path", ffprobePath: "FFprobe Path",
+        recursiveScan: "Recursive Scan", overwrite: "Overwrite", dryRun: "Dry Run", keepTempFiles: "Keep Temp Files", autoDownloadDeps: "Auto Download Deps",
+        outputDirHint: "Leave empty to use the default merged folder under the source directory.", tempDirHint: "Leave empty to use the system default temp directory.",
+        sortNameNaturalAsc: "Filename natural (A-Z)", sortNameNaturalDesc: "Filename natural (Z-A)", sortNameAsc: "Filename text (A-Z)", sortNameDesc: "Filename text (Z-A)",
+        sortModifiedAsc: "Modified time (oldest first)", sortModifiedDesc: "Modified time (newest first)", sortSizeAsc: "File size (smallest first)", sortSizeDesc: "File size (largest first)",
+        startMerge: "▷ START MERGE", stopMerge: "■ STOP MERGE", switchLanguage: "Switch language",
+        modeSelected: "{mode} MODE SELECTED", selectFolderPlan: "Select a folder to preview the merge plan.",
+        fastPlan: "Tool will stream-copy compatible groups only. Incompatible files will be skipped.",
+        optimalPlan: "Tool will create up to {count} output file(s), separated by landscape and portrait display orientation.",
+        extremePlan: "Tool will normalize all files to one display canvas and produce one output file.",
+        groupLabel: "{orientation} group ({size})", ready: "Ready", needsTranscode: "Needs Transcode", summary: "{files} files detected - {groups} groups",
+        folderCancelled: "Folder selection was cancelled or is unavailable on this system.", scanning: "Scanning {path}", filesAnalyzed: "{count} files analyzed.",
+        startingMerge: "Starting {mode} merge", stoppingMerge: "Stopping current merge task...", selectBegin: "Select a source folder to begin.",
+        tipName: "Maps to --name. Leave empty to use automatic names based on folder, mode, and resolution.",
+        tipOutputDir: "Maps to --output-dir. Leave empty to create/use a merged folder under the source directory.",
+        tipTempDir: "Maps to --temp-dir. Leave empty to use the system default temp directory.",
+        tipOutputFormat: "Maps to --output-format. Supported containers: mp4, mkv, mov, avi, ts, webm.",
+        tipSortOrder: "Maps to --sort-by. Controls the scan, preview, preprocessing, and final merge order.",
+        tipVideoCodec: "Maps to --video-codec. Leave empty for automatic codec selection.",
+        tipGpu: "Maps to --gpu. auto chooses the native encoder when available and falls back to CPU when needed.",
+        tipAudioCodec: "Maps to --audio-codec. Leave empty to use majority vote, defaulting to AAC when needed.",
+        tipCrf: "Maps to --crf. Lower means better quality and larger files.",
+        tipPreset: "Maps to --preset. Slower presets usually produce smaller files at the same CRF but take longer.",
+        tipFpsPolicy: "Maps to --fps-policy. majority uses the most common FPS; max/min choose the highest/lowest FPS.",
+        tipResolutionPolicy: "Maps to --resolution-policy. Currently only largest is supported.",
+        tipPadColor: "Maps to --pad-color. Used when videos are scaled into a canvas without cropping.",
+        tipFfmpegPath: "Maps to --ffmpeg-path. Optional explicit path to ffmpeg binary.",
+        tipFfprobePath: "Maps to --ffprobe-path. Optional explicit path to ffprobe binary.",
+        tipRecursive: "Maps to --recursive / --no-recursive. When enabled, scans subfolders.",
+        tipOverwrite: "Maps to --overwrite. Replace existing output files instead of appending a numeric suffix.",
+        tipDryRun: "Maps to --dry-run. Prints commands and plan without running FFmpeg.",
+        tipKeepTemp: "Maps to --keep-temp. Keeps preprocessed intermediate files for inspection.",
+        tipAutoDownload: "Maps to --auto-download-deps / --no-auto-download-deps. Attempts to download ffmpeg/ffprobe when missing."
+      },
+      zh: {
+        ffmpegNotChecked: "! FFmpeg 未检查", ffmpegChecking: "... 正在检查 FFmpeg", ffmpegInstalled: "✓ FFmpeg 已安装", ffmpegMissing: "! FFmpeg 缺失", refreshFfmpeg: "重新检查 FFmpeg",
+        sourceFiles: "源文件", noFolderSelected: "未选择文件夹", selectFolder: "选择文件夹", filename: "文件名", resolution: "分辨率", codec: "编码", duration: "时长", status: "状态",
+        processConsole: "处理控制台", configuration: "配置", mergeStrategy: "合并策略", outputSettings: "输出设置", browse: "浏览",
+        fastMerge: "快速合并", optimalMerge: "智能合并", extremeMerge: "强制合并", lossless: "无损", smart: "智能", bruteForce: "强制",
+        fastDesc: "仅使用流复制，跳过不兼容分组。", optimalDesc: "按横竖屏分组，必要时转码。", extremeDesc: "统一所有文件到一个输出。",
+        outputFilenamePrefix: "输出文件名前缀", outputFolder: "输出目录", tempFolder: "临时目录", outputFormat: "输出格式", mergeSortOrder: "合并排序方式", targetVideoCodec: "目标视频编码",
+        gpuAcceleration: "GPU 加速", targetAudioCodec: "目标音频编码", crfQuality: "CRF（质量）", lowerBetter: "越低质量越高", preset: "编码预设",
+        fpsPolicy: "帧率策略", resolutionPolicy: "分辨率策略", padColor: "填充颜色", ffmpegPath: "FFmpeg 路径", ffprobePath: "FFprobe 路径",
+        recursiveScan: "递归扫描", overwrite: "覆盖输出", dryRun: "试运行", keepTempFiles: "保留临时文件", autoDownloadDeps: "自动下载依赖",
+        outputDirHint: "留空时默认使用源目录下的 merged 文件夹。", tempDirHint: "留空时使用系统默认临时目录。",
+        sortNameNaturalAsc: "文件名自然升序", sortNameNaturalDesc: "文件名自然降序", sortNameAsc: "文件名文本升序", sortNameDesc: "文件名文本降序",
+        sortModifiedAsc: "修改时间从旧到新", sortModifiedDesc: "修改时间从新到旧", sortSizeAsc: "文件大小从小到大", sortSizeDesc: "文件大小从大到小",
+        startMerge: "▷ 开始合并", stopMerge: "■ 停止合并", switchLanguage: "切换语言",
+        modeSelected: "已选择 {mode} 模式", selectFolderPlan: "选择文件夹后预览合并计划。",
+        fastPlan: "工具将仅对兼容分组合并，跳过不兼容文件。",
+        optimalPlan: "工具将按横竖屏生成最多 {count} 个输出文件。",
+        extremePlan: "工具将把所有文件统一到一个画布并生成一个输出文件。",
+        groupLabel: "{orientation} 分组（{size}）", ready: "就绪", needsTranscode: "需要转码", summary: "检测到 {files} 个文件 - {groups} 个分组",
+        folderCancelled: "文件夹选择已取消，或当前系统不可用。", scanning: "正在扫描 {path}", filesAnalyzed: "已分析 {count} 个文件。",
+        startingMerge: "开始 {mode} 合并", stoppingMerge: "正在停止当前合并任务...", selectBegin: "请选择源文件夹开始。",
+        tipName: "对应 --name。留空时根据文件夹、模式和分辨率自动命名。",
+        tipOutputDir: "对应 --output-dir。留空时在源目录下创建或使用 merged 文件夹。",
+        tipTempDir: "对应 --temp-dir。留空时使用系统默认临时目录。",
+        tipOutputFormat: "对应 --output-format。支持 mp4、mkv、mov、avi、ts、webm。",
+        tipSortOrder: "对应 --sort-by。控制扫描、预览、预处理和最终合并顺序。",
+        tipVideoCodec: "对应 --video-codec。留空时自动选择编码。",
+        tipGpu: "对应 --gpu。auto 会优先选择可用的系统原生编码器，必要时回退 CPU。",
+        tipAudioCodec: "对应 --audio-codec。留空时按多数文件选择，需要时默认 AAC。",
+        tipCrf: "对应 --crf。数值越低质量越高，文件越大。",
+        tipPreset: "对应 --preset。更慢的预设通常体积更小，但耗时更长。",
+        tipFpsPolicy: "对应 --fps-policy。majority 使用最常见帧率，max/min 选择最高/最低帧率。",
+        tipResolutionPolicy: "对应 --resolution-policy。目前仅支持 largest。",
+        tipPadColor: "对应 --pad-color。视频缩放到画布且不裁剪时使用。",
+        tipFfmpegPath: "对应 --ffmpeg-path。可选的 ffmpeg 二进制路径。",
+        tipFfprobePath: "对应 --ffprobe-path。可选的 ffprobe 二进制路径。",
+        tipRecursive: "对应 --recursive / --no-recursive。启用后扫描子文件夹。",
+        tipOverwrite: "对应 --overwrite。替换已有输出，不追加数字后缀。",
+        tipDryRun: "对应 --dry-run。只打印命令和计划，不运行 FFmpeg。",
+        tipKeepTemp: "对应 --keep-temp。保留预处理临时文件用于检查。",
+        tipAutoDownload: "对应 --auto-download-deps / --no-auto-download-deps。缺少 ffmpeg/ffprobe 时尝试自动下载。"
+      }
+    };
+    const state = {
+      mode: "optimal",
+      inputDir: "",
+      files: [],
+      running: false,
+      statusTimer: null,
+      lang: localStorage.getItem("vmt_lang") || "en",
+      deps: { status: "notChecked", message: "" }
+    };
     const $ = (id) => document.getElementById(id);
+    const t = (key, values = {}) => {
+      let text = (messages[state.lang] && messages[state.lang][key]) || messages.en[key] || key;
+      Object.entries(values).forEach(([name, value]) => { text = text.replace(`{${name}}`, value); });
+      return text;
+    };
+    function applyLanguage() {
+      document.documentElement.lang = state.lang === "zh" ? "zh-Hans" : "en";
+      document.querySelectorAll("[data-i18n]").forEach(node => { node.textContent = t(node.dataset.i18n); });
+      document.querySelectorAll("[data-tip-i18n]").forEach(node => { node.dataset.tip = t(node.dataset.tipI18n); });
+      $("languageSelect").value = state.lang;
+      $("languageSelect").title = t("switchLanguage");
+      renderDepStatus();
+      setRunning(state.running);
+      renderModes();
+      if (!state.files.length && !state.inputDir) $("summary").textContent = t("noFolderSelected");
+    }
+    function renderDepStatus() {
+      const keys = {
+        notChecked: "ffmpegNotChecked",
+        checking: "ffmpegChecking",
+        installed: "ffmpegInstalled",
+        missing: "ffmpegMissing"
+      };
+      const badge = $("ffmpegStatus");
+      badge.textContent = t(keys[state.deps.status] || "ffmpegNotChecked");
+      badge.title = state.deps.message ? `${t("refreshFfmpeg")}: ${state.deps.message}` : t("refreshFfmpeg");
+      badge.disabled = state.deps.status === "checking";
+    }
     function log(message) {
       const stamp = new Date().toTimeString().slice(0, 8);
       $("logs").textContent += `[${stamp}] ${message}\n`;
@@ -456,7 +612,7 @@ HTML = r"""<!doctype html>
     function setRunning(running) {
       state.running = running;
       const button = $("startMerge");
-      button.textContent = running ? "■ STOP MERGE" : "▷ START MERGE";
+      button.textContent = running ? t("stopMerge") : t("startMerge");
       button.classList.toggle("stop", running);
     }
     async function api(path, body) {
@@ -466,17 +622,23 @@ HTML = r"""<!doctype html>
         body: body ? JSON.stringify(body) : undefined
       });
       const payload = await response.json();
-      if (!response.ok) throw new Error(payload.error || response.statusText);
+      if (!response.ok) throw new Error(payload.error || payload.message || response.statusText);
       return payload;
     }
     async function checkDeps() {
-      $("ffmpegStatus").textContent = "… Checking FFmpeg";
+      state.deps = { status: "checking", message: "" };
+      renderDepStatus();
       try {
         const payload = await api("/deps");
-        $("ffmpegStatus").textContent = payload.ok ? "✓ FFmpeg Installed" : "! FFmpeg Missing";
+        state.deps = {
+          status: payload.ok ? "installed" : "missing",
+          message: payload.message || ""
+        };
+        renderDepStatus();
         log(payload.message);
       } catch (error) {
-        $("ffmpegStatus").textContent = "! FFmpeg Missing";
+        state.deps = { status: "missing", message: error.message };
+        renderDepStatus();
         log(`ERROR: ${error.message}`);
       }
     }
@@ -484,21 +646,21 @@ HTML = r"""<!doctype html>
       document.querySelectorAll(".mode-card").forEach(card => {
         card.classList.toggle("active", card.dataset.mode === state.mode);
       });
-      $("planTitle").textContent = `${state.mode.toUpperCase()} MODE SELECTED`;
+      $("planTitle").textContent = t("modeSelected", { mode: state.mode.toUpperCase() });
       updatePlan();
     }
     function updatePlan() {
       if (!state.files.length) {
-        $("planText").textContent = "Select a folder to preview the merge plan.";
+        $("planText").textContent = t("selectFolderPlan");
         return;
       }
       const groups = new Set(state.files.map(file => file.orientation));
       if (state.mode === "fast") {
-        $("planText").textContent = "Tool will stream-copy compatible groups only. Incompatible files will be skipped.";
+        $("planText").textContent = t("fastPlan");
       } else if (state.mode === "optimal") {
-        $("planText").textContent = `Tool will create up to ${groups.size} output file(s), separated by landscape and portrait display orientation.`;
+        $("planText").textContent = t("optimalPlan", { count: groups.size });
       } else {
-        $("planText").textContent = "Tool will normalize all files to one display canvas and produce one output file.";
+        $("planText").textContent = t("extremePlan");
       }
     }
     function renderFiles(files) {
@@ -512,10 +674,10 @@ HTML = r"""<!doctype html>
       Object.entries(by).forEach(([orientation, group]) => {
         const w = Math.max(...group.map(file => file.display_width));
         const h = Math.max(...group.map(file => file.display_height));
-        rows.insertAdjacentHTML("beforeend", `<tr class="group-row"><td colspan="6">${orientation} group (${w}x${h})</td></tr>`);
+        rows.insertAdjacentHTML("beforeend", `<tr class="group-row"><td colspan="6">${t("groupLabel", { orientation, size: `${w}x${h}` })}</td></tr>`);
         group.forEach(file => {
           const cls = file.fast_ready ? "status-ok" : "status-warn";
-          const status = file.fast_ready ? "Ready" : "Needs Transcode";
+          const status = file.fast_ready ? t("ready") : t("needsTranscode");
           rows.insertAdjacentHTML("beforeend", `
             <tr>
               <td title="${file.path}">${file.name}</td>
@@ -527,34 +689,34 @@ HTML = r"""<!doctype html>
             </tr>`);
         });
       });
-      $("summary").textContent = `${files.length} files detected • ${Object.keys(by).length} groups`.toUpperCase();
+      $("summary").textContent = t("summary", { files: files.length, groups: Object.keys(by).length }).toUpperCase();
       updatePlan();
     }
     async function selectFolder(kind) {
       try {
         const result = await api(`/pick-folder?kind=${kind}`);
         if (!result.path) {
-          log("Folder selection was cancelled or is unavailable on this system.");
+          log(t("folderCancelled"));
           return;
         }
         if (kind === "source") {
           state.inputDir = result.path;
           await scan();
         } else {
-          $("outputDir").value = result.path;
+          $(kind === "temp" ? "tempDir" : "outputDir").value = result.path;
         }
       } catch (error) { log(`ERROR: ${error.message}`); }
     }
     async function scan() {
       if (!state.inputDir) return selectFolder("source");
       progress(5);
-      log(`Scanning ${state.inputDir}`);
+      log(t("scanning", { path: state.inputDir }));
       try {
-        const payload = await api("/scan", { input_dir: state.inputDir, recursive: $("recursive").checked });
+        const payload = await api("/scan", { input_dir: state.inputDir, recursive: $("recursive").checked, sort_by: $("sortBy").value });
         state.files = payload.files;
         renderFiles(payload.files);
         progress(100);
-        log(`${payload.files.length} files analyzed.`);
+        log(t("filesAnalyzed", { count: payload.files.length }));
       } catch (error) {
         progress(0);
         log(`ERROR: ${error.message}`);
@@ -570,7 +732,7 @@ HTML = r"""<!doctype html>
         if (!state.inputDir) return;
       }
       progress(4);
-      log(`Starting ${state.mode} merge`);
+      log(t("startingMerge", { mode: state.mode }));
       try {
         const payload = await api("/merge", {
           input_dir: state.inputDir,
@@ -578,6 +740,7 @@ HTML = r"""<!doctype html>
           name: $("name").value,
           output_dir: $("outputDir").value,
           output_format: $("format").value,
+          sort_by: $("sortBy").value,
           video_codec: $("codec").value,
           gpu: $("gpu").value,
           audio_codec: $("audioCodec").value,
@@ -588,6 +751,7 @@ HTML = r"""<!doctype html>
           pad_color: $("padColor").value,
           ffmpeg_path: $("ffmpegPath").value,
           ffprobe_path: $("ffprobePath").value,
+          temp_dir: $("tempDir").value,
           recursive: $("recursive").checked,
           overwrite: $("overwrite").checked,
           dry_run: $("dryRun").checked,
@@ -616,7 +780,7 @@ HTML = r"""<!doctype html>
     }
     async function cancelMerge() {
       try {
-        log("Stopping current merge task...");
+        log(t("stoppingMerge"));
         await api("/cancel", {});
       } catch (error) {
         log(`ERROR: ${error.message}`);
@@ -628,8 +792,16 @@ HTML = r"""<!doctype html>
     }));
     $("selectSource").addEventListener("click", () => selectFolder("source"));
     $("selectOutput").addEventListener("click", () => selectFolder("output"));
+    $("selectTemp").addEventListener("click", () => selectFolder("temp"));
     $("refresh").addEventListener("click", scan);
     $("startMerge").addEventListener("click", merge);
+    $("languageSelect").addEventListener("change", () => {
+      state.lang = $("languageSelect").value;
+      localStorage.setItem("vmt_lang", state.lang);
+      applyLanguage();
+      if (state.files.length) renderFiles(state.files);
+    });
+    $("ffmpegStatus").addEventListener("click", checkDeps);
     document.querySelectorAll(".info").forEach(icon => {
       icon.addEventListener("mouseenter", () => {
         const tip = $("tooltip");
@@ -651,8 +823,8 @@ HTML = r"""<!doctype html>
         $("tooltip").style.display = "none";
       });
     });
-    renderModes();
-    log("Select a source folder to begin.");
+    applyLanguage();
+    log(t("selectBegin"));
     checkDeps();
   </script>
 </body>
@@ -735,17 +907,26 @@ def launch_gui(host: str = "127.0.0.1", port: int | None = None) -> None:
     url = f"http://{host}:{port}"
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
-    webbrowser.open(url)
     print(f"VideoMergingTool GUI running at {url}")
-    print("Press Ctrl+C to stop.")
     try:
-        while thread.is_alive():
-            time.sleep(0.3)
+        _open_desktop_window(url)
     except KeyboardInterrupt:
         pass
     finally:
         server.shutdown()
         server.server_close()
+
+
+def _open_desktop_window(url: str) -> None:
+    try:
+        import webview
+    except ImportError as exc:
+        raise RuntimeError(
+            "Desktop GUI requires pywebview. Install dependencies with `pip install -r requirements.txt`."
+        ) from exc
+
+    webview.create_window("VideoMergingTool", url, width=1280, height=820, min_size=(900, 620))
+    webview.start()
 
 
 def _make_handler(state: GuiState):
@@ -787,7 +968,7 @@ def _make_handler(state: GuiState):
         def _deps(self) -> None:
             try:
                 logger = _gui_logger(state)
-                tools = resolve_tools(logger, True, Path.cwd() / ".tools" / "ffmpeg")
+                tools = resolve_tools(logger, True, default_tools_dir())
                 encoders = detect_ffmpeg_encoders(tools)
                 gpu_encoders = sorted(
                     encoder
@@ -813,9 +994,13 @@ def _make_handler(state: GuiState):
             try:
                 logger = _gui_logger(state)
                 state.set_progress(8)
-                tools = resolve_tools(logger, True, Path.cwd() / ".tools" / "ffmpeg")
+                tools = resolve_tools(logger, True, default_tools_dir())
                 input_dir = Path(str(payload["input_dir"]))
-                paths = scan_video_files(input_dir, bool(payload.get("recursive", True)))
+                paths = scan_video_files(
+                    input_dir,
+                    bool(payload.get("recursive", True)),
+                    str(payload.get("sort_by") or "name-natural-asc"),
+                )
                 state.set_progress(25)
                 media_files, failures = probe_files(paths, tools, logger)
                 if failures:
@@ -917,6 +1102,8 @@ def _build_merge_command(payload: dict[str, object]) -> list[str]:
         cmd.extend(["--name", str(payload["name"])])
     if payload.get("output_dir"):
         cmd.extend(["--output-dir", str(payload["output_dir"])])
+    if payload.get("sort_by"):
+        cmd.extend(["--sort-by", str(payload["sort_by"])])
     if payload.get("video_codec"):
         cmd.extend(["--video-codec", str(payload["video_codec"])])
     if payload.get("gpu"):
@@ -936,6 +1123,8 @@ def _build_merge_command(payload: dict[str, object]) -> list[str]:
         cmd.extend(["--ffmpeg-path", str(payload["ffmpeg_path"])])
     if payload.get("ffprobe_path"):
         cmd.extend(["--ffprobe-path", str(payload["ffprobe_path"])])
+    if payload.get("temp_dir"):
+        cmd.extend(["--temp-dir", str(payload["temp_dir"])])
     if not payload.get("recursive", True):
         cmd.append("--no-recursive")
     if payload.get("overwrite"):
@@ -967,15 +1156,9 @@ def _run_merge(command: list[str], state: GuiState) -> None:
         for line in process.stdout:
             stripped = line.rstrip()
             state.log(stripped)
-            lowered = stripped.lower()
-            if "media:" in lowered:
-                state.set_progress(18)
-            elif "preprocess" in lowered:
-                state.set_progress(45)
-            elif "merge order" in lowered:
-                state.set_progress(72)
-            elif "output written" in lowered:
-                state.set_progress(92)
+            progress_match = re.search(r"Progress:\s+(\d+)/(\d+)\s+\((\d+)%\)", stripped)
+            if progress_match:
+                state.set_progress(int(progress_match.group(3)))
         code = process.wait()
         was_cancelled = state.finish_process()
         if was_cancelled:
