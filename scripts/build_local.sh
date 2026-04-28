@@ -21,6 +21,7 @@ PYINSTALLER_ARGS=(
   --collect-all click
   --collect-all rich
   --collect-all webview
+  --collect-all certifi
   --hidden-import videomerge.gui
   --hidden-import tkinter
 )

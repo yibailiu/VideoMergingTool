@@ -30,6 +30,7 @@ if (Test-Path "build") {
     --collect-all click `
     --collect-all rich `
     --collect-all webview `
+    --collect-all certifi `
     --hidden-import videomerge.gui `
     --hidden-import tkinter `
     main.py

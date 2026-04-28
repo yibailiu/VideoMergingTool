@@ -4,6 +4,7 @@ import logging
 import os
 import platform
 import shutil
+import ssl
 import stat
 import sys
 import tarfile
@@ -119,9 +120,19 @@ def _find_binary(name: str, tools_dir: Path) -> Path | None:
 def _download(url: str, output: Path, logger: logging.Logger) -> None:
     logger.info("Downloading %s", url)
     try:
-        urllib.request.urlretrieve(url, output)
+        with urllib.request.urlopen(url, context=_ssl_context()) as response, output.open("wb") as file:
+            shutil.copyfileobj(response, file)
     except Exception as exc:  # pragma: no cover - depends on network.
         raise DependencyError(f"Failed to download {url}: {exc}") from exc
+
+
+def _ssl_context() -> ssl.SSLContext:
+    try:
+        import certifi
+
+        return ssl.create_default_context(cafile=certifi.where())
+    except Exception:
+        return ssl.create_default_context()
 
 
 def _archive_suffix(url: str) -> str:

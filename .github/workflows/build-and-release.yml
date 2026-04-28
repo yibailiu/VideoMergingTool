@@ -44,15 +44,15 @@ jobs:
 
       - name: Build executable on Windows
         if: runner.os == 'Windows'
-        run: pyinstaller --onefile --windowed --clean --noconfirm --name VideoMergingTool --icon assets/icons/VideoMergingTool.ico --collect-all typer --collect-all click --collect-all rich --collect-all webview --hidden-import videomerge.gui --hidden-import tkinter main.py
+        run: pyinstaller --onefile --windowed --clean --noconfirm --name VideoMergingTool --icon assets/icons/VideoMergingTool.ico --collect-all typer --collect-all click --collect-all rich --collect-all webview --collect-all certifi --hidden-import videomerge.gui --hidden-import tkinter main.py
 
       - name: Build app on macOS
         if: runner.os == 'macOS'
-        run: pyinstaller --windowed --clean --noconfirm --name VideoMergingTool --icon assets/icons/VideoMergingTool.icns --collect-all typer --collect-all click --collect-all rich --collect-all webview --hidden-import videomerge.gui --hidden-import tkinter main.py
+        run: pyinstaller --windowed --clean --noconfirm --name VideoMergingTool --icon assets/icons/VideoMergingTool.icns --collect-all typer --collect-all click --collect-all rich --collect-all webview --collect-all certifi --hidden-import videomerge.gui --hidden-import tkinter main.py
 
       - name: Build executable on Linux
         if: runner.os == 'Linux'
-        run: pyinstaller --onefile --windowed --clean --noconfirm --name VideoMergingTool --icon assets/icons/VideoMergingTool.png --collect-all typer --collect-all click --collect-all rich --collect-all webview --hidden-import videomerge.gui --hidden-import tkinter main.py
+        run: pyinstaller --onefile --windowed --clean --noconfirm --name VideoMergingTool --icon assets/icons/VideoMergingTool.png --collect-all typer --collect-all click --collect-all rich --collect-all webview --collect-all certifi --hidden-import videomerge.gui --hidden-import tkinter main.py
 
       - name: Prepare artifact on Windows
         if: runner.os == 'Windows'
