@@ -1066,6 +1066,8 @@ def _make_handler(state: GuiState):
                 state.set_progress(8)
                 tools = resolve_tools(logger, True, default_tools_dir())
                 input_dir = Path(str(payload["input_dir"]))
+                if not input_dir.is_dir():
+                    raise ValueError(f"Selected path is not a folder: {input_dir}")
                 paths = scan_video_files(
                     input_dir,
                     bool(payload.get("recursive", True)),
@@ -1319,12 +1321,14 @@ def _pick_folder_windows(title: str) -> str:
     escaped_title = title.replace("'", "''")
     script = f"""
 Add-Type -AssemblyName System.Windows.Forms
+[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new()
 $dialog = New-Object System.Windows.Forms.OpenFileDialog
 $dialog.Title = '{escaped_title}'
 $dialog.CheckFileExists = $false
 $dialog.ValidateNames = $false
 $dialog.FileName = 'Select this folder'
 $dialog.Filter = 'All files (*.*)|*.*'
+$dialog.RestoreDirectory = $true
 if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {{
   $selected = $dialog.FileName
   if (Test-Path -LiteralPath $selected -PathType Container) {{
@@ -1345,10 +1349,22 @@ if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {{
             **subprocess_window_kwargs(),
         )
         if result.returncode == 0:
-            return result.stdout.strip()
+            return _normalize_picked_folder(result.stdout.strip())
     except Exception:
         return ""
     return ""
+
+
+def _normalize_picked_folder(path_text: str) -> str:
+    path_text = path_text.strip().strip('"')
+    if not path_text:
+        return ""
+    path = Path(path_text)
+    if path.name == "Select this folder":
+        return str(path.parent)
+    if path.exists() and path.is_file():
+        return str(path.parent)
+    return str(path)
 
 
 def _config_dir() -> Path:

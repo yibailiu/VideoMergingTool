@@ -14,19 +14,26 @@ permissions:
 
 jobs:
   build:
-    name: Build ${{ matrix.os }}
+    name: Build ${{ matrix.label }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         include:
           - os: windows-latest
+            label: windows-x64
             artifact_name: VideoMergingTool-windows-x64
             package_path: dist/installer/VideoMergingTool-Setup.exe
-          - os: macos-latest
-            artifact_name: VideoMergingTool-macos-arm64
-            package_path: dist/VideoMergingTool.dmg
+          - os: macos-13
+            label: macos-intel
+            artifact_name: VideoMergingTool-macos-intel
+            package_path: dist/VideoMergingTool-macos-intel.dmg
+          - os: macos-14
+            label: macos-apple-silicon
+            artifact_name: VideoMergingTool-macos-apple-silicon
+            package_path: dist/VideoMergingTool-macos-apple-silicon.dmg
           - os: ubuntu-latest
+            label: linux-x64
             artifact_name: VideoMergingTool-linux-x64
             package_path: dist/VideoMergingTool
 
@@ -53,7 +60,9 @@ jobs:
 
       - name: Build app on macOS
         if: runner.os == 'macOS'
-        run: bash scripts/build_local.sh
+        run: |
+          bash scripts/build_local.sh
+          mv dist/VideoMergingTool.dmg "${{ matrix.package_path }}"
 
       - name: Build executable on Linux
         if: runner.os == 'Linux'

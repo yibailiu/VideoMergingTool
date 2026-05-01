@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from videomerge.gui import _load_gui_config, _pick_folder, _save_gui_config
+from videomerge.gui import _load_gui_config, _normalize_picked_folder, _pick_folder, _save_gui_config
 
 
 class GuiFolderPickerTests(unittest.TestCase):
@@ -83,7 +83,14 @@ class GuiFolderPickerTests(unittest.TestCase):
 
         self.assertEqual(selected, "C:/Videos")
         self.assertIn("All files (*.*)|*.*", commands[0])
+        self.assertIn("OutputEncoding", commands[0])
         self.assertNotIn("*.folder", commands[0])
+
+    def test_normalize_picked_folder_strips_placeholder_name(self) -> None:
+        self.assertEqual(
+            _normalize_picked_folder("C:/Videos/Select this folder"),
+            "C:/Videos",
+        )
 
 
 if __name__ == "__main__":

@@ -35,7 +35,7 @@ if [[ "$(uname -s)" == "Darwin" ]]; then
   PYINSTALLER_ARGS+=(
     --windowed
     --icon "$ICON_ICNS"
-    --osx-bundle-identifier "com.videomergingtool.app"
+    --osx-bundle-identifier "com.yibailiu.VideoMergingTool"
     --add-binary "$VENDOR_FFMPEG_DIR/ffmpeg:ffmpeg"
     --add-binary "$VENDOR_FFMPEG_DIR/ffprobe:ffmpeg"
   )
@@ -58,8 +58,10 @@ if [[ "$(uname -s)" == "Darwin" && -d "$PROJECT_ROOT/dist/$NAME.app" ]]; then
   INFO_PLIST="$PROJECT_ROOT/dist/$NAME.app/Contents/Info.plist"
   plutil -replace CFBundleShortVersionString -string "$BUNDLE_VERSION" "$INFO_PLIST"
   plutil -replace CFBundleVersion -string "$VERSION" "$INFO_PLIST"
-  plutil -replace CFBundleIconName -string "VideoMergingTool" "$INFO_PLIST"
+  plutil -replace CFBundleIconFile -string "VideoMergingTool.icns" "$INFO_PLIST"
+  plutil -remove CFBundleIconName "$INFO_PLIST" 2>/dev/null || true
   codesign --force --deep --sign - "$PROJECT_ROOT/dist/$NAME.app"
+  touch "$PROJECT_ROOT/dist/$NAME.app"
   rm -f "$DMG_PATH"
   rm -rf "$DMG_ROOT"
   mkdir -p "$DMG_ROOT"
