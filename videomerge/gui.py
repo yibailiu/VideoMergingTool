@@ -26,6 +26,28 @@ from .utils import subprocess_window_kwargs
 from . import __version__
 
 
+CONFIG_FIELD_IDS = [
+    "name",
+    "format",
+    "sortBy",
+    "codec",
+    "gpu",
+    "audioCodec",
+    "crf",
+    "preset",
+    "fpsPolicy",
+    "resolutionPolicy",
+    "padColor",
+    "ffmpegPath",
+    "ffprobePath",
+    "recursive",
+    "overwrite",
+    "dryRun",
+    "keepTemp",
+    "autoDownloadDeps",
+]
+
+
 HTML = r"""<!doctype html>
 <html lang="en">
 <head>
@@ -569,7 +591,7 @@ HTML = r"""<!doctype html>
       files: [],
       running: false,
       statusTimer: null,
-      lang: localStorage.getItem("vmt_lang") || "en",
+      lang: "en",
       deps: { status: "notChecked", message: "" }
     };
     const $ = (id) => document.getElementById(id);
@@ -626,6 +648,36 @@ HTML = r"""<!doctype html>
       const payload = await response.json();
       if (!response.ok) throw new Error(payload.error || payload.message || response.statusText);
       return payload;
+    }
+    function readConfig() {
+      const values = { lang: state.lang, mode: state.mode };
+      const ids = ["name", "format", "sortBy", "codec", "gpu", "audioCodec", "crf", "preset", "fpsPolicy", "resolutionPolicy", "padColor", "ffmpegPath", "ffprobePath", "recursive", "overwrite", "dryRun", "keepTemp", "autoDownloadDeps"];
+      ids.forEach(id => {
+        const node = $(id);
+        values[id] = node.type === "checkbox" ? node.checked : node.value;
+      });
+      return values;
+    }
+    function applyConfig(config) {
+      if (!config || typeof config !== "object") return;
+      if (config.lang && messages[config.lang]) state.lang = config.lang;
+      if (config.mode) state.mode = config.mode;
+      Object.entries(config).forEach(([id, value]) => {
+        const node = $(id);
+        if (!node) return;
+        if (node.type === "checkbox") node.checked = Boolean(value);
+        else node.value = value;
+      });
+    }
+    async function loadConfig() {
+      try { applyConfig(await api("/config")); } catch (error) { log(`ERROR: ${error.message}`); }
+    }
+    let saveTimer = null;
+    function scheduleSaveConfig() {
+      if (saveTimer) clearTimeout(saveTimer);
+      saveTimer = setTimeout(async () => {
+        try { await api("/config", readConfig()); } catch (error) { log(`ERROR: ${error.message}`); }
+      }, 250);
     }
     async function checkDeps() {
       state.deps = { status: "checking", message: "" };
@@ -791,6 +843,7 @@ HTML = r"""<!doctype html>
     document.querySelectorAll(".mode-card").forEach(card => card.addEventListener("click", () => {
       state.mode = card.dataset.mode;
       renderModes();
+      scheduleSaveConfig();
     }));
     $("selectSource").addEventListener("click", () => selectFolder("source"));
     $("selectOutput").addEventListener("click", () => selectFolder("output"));
@@ -799,9 +852,14 @@ HTML = r"""<!doctype html>
     $("startMerge").addEventListener("click", merge);
     $("languageSelect").addEventListener("change", () => {
       state.lang = $("languageSelect").value;
-      localStorage.setItem("vmt_lang", state.lang);
       applyLanguage();
       if (state.files.length) renderFiles(state.files);
+      scheduleSaveConfig();
+    });
+    ["name", "format", "sortBy", "codec", "gpu", "audioCodec", "crf", "preset", "fpsPolicy", "resolutionPolicy", "padColor", "ffmpegPath", "ffprobePath", "recursive", "overwrite", "dryRun", "keepTemp", "autoDownloadDeps"].forEach(id => {
+      const node = $(id);
+      node.addEventListener(node.type === "checkbox" ? "change" : "input", scheduleSaveConfig);
+      node.addEventListener("change", scheduleSaveConfig);
     });
     $("ffmpegStatus").addEventListener("click", checkDeps);
     document.querySelectorAll(".info").forEach(icon => {
@@ -825,9 +883,12 @@ HTML = r"""<!doctype html>
         $("tooltip").style.display = "none";
       });
     });
-    applyLanguage();
-    log(t("selectBegin"));
-    checkDeps();
+    (async () => {
+      await loadConfig();
+      applyLanguage();
+      log(t("selectBegin"));
+      checkDeps();
+    })();
   </script>
 </body>
 </html>
@@ -951,6 +1012,9 @@ def _make_handler(state: GuiState):
             if parsed.path == "/status":
                 self._send_json(state.snapshot())
                 return
+            if parsed.path == "/config":
+                self._send_json(_load_gui_config())
+                return
             self._send_json({"error": "Not found"}, HTTPStatus.NOT_FOUND)
 
         def do_POST(self) -> None:
@@ -964,6 +1028,10 @@ def _make_handler(state: GuiState):
                 return
             if parsed.path == "/cancel":
                 self._cancel()
+                return
+            if parsed.path == "/config":
+                _save_gui_config(payload)
+                self._send_json({"ok": True})
                 return
             self._send_json({"error": "Not found"}, HTTPStatus.NOT_FOUND)
 
@@ -1256,7 +1324,7 @@ $dialog.Title = '{escaped_title}'
 $dialog.CheckFileExists = $false
 $dialog.ValidateNames = $false
 $dialog.FileName = 'Select this folder'
-$dialog.Filter = 'Folders|*.folder'
+$dialog.Filter = 'All files (*.*)|*.*'
 if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {{
   $selected = $dialog.FileName
   if (Test-Path -LiteralPath $selected -PathType Container) {{
@@ -1281,6 +1349,39 @@ if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {{
     except Exception:
         return ""
     return ""
+
+
+def _config_dir() -> Path:
+    system = platform.system()
+    if system == "Darwin":
+        return Path.home() / "Library" / "Application Support" / "VideoMergingTool"
+    if system == "Windows":
+        root = os.environ.get("APPDATA") or os.environ.get("LOCALAPPDATA")
+        return Path(root) / "VideoMergingTool" if root else Path.home() / "AppData" / "Roaming" / "VideoMergingTool"
+    return Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "VideoMergingTool"
+
+
+def _config_path() -> Path:
+    return _config_dir() / "config.json"
+
+
+def _load_gui_config() -> dict[str, object]:
+    path = _config_path()
+    if not path.exists():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _save_gui_config(payload: dict[str, object]) -> None:
+    allowed = set(CONFIG_FIELD_IDS) | {"lang", "mode"}
+    clean = {key: value for key, value in payload.items() if key in allowed}
+    path = _config_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(clean, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
 def _pick_folder_tk(title: str) -> str:

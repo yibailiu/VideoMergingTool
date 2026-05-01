@@ -59,6 +59,7 @@ if [[ "$(uname -s)" == "Darwin" && -d "$PROJECT_ROOT/dist/$NAME.app" ]]; then
   plutil -replace CFBundleShortVersionString -string "$BUNDLE_VERSION" "$INFO_PLIST"
   plutil -replace CFBundleVersion -string "$VERSION" "$INFO_PLIST"
   plutil -replace CFBundleIconName -string "VideoMergingTool" "$INFO_PLIST"
+  codesign --force --deep --sign - "$PROJECT_ROOT/dist/$NAME.app"
   rm -f "$DMG_PATH"
   rm -rf "$DMG_ROOT"
   mkdir -p "$DMG_ROOT"
