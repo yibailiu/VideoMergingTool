@@ -15,12 +15,15 @@ if (-not (Test-Path ".venv")) {
 
 & ".\.venv\Scripts\python.exe" -m pip install --upgrade pip
 & ".\.venv\Scripts\python.exe" -m pip install -r requirements-build.txt
+$Version = (& ".\.venv\Scripts\python.exe" -c "from videomerge import __version__; print(__version__)").Trim()
+$VersionFile = Join-Path $ProjectRoot "build\version_info.txt"
 
 if (Test-Path "build") {
     Remove-Item -Recurse -Force "build"
 }
 
 & ".\.venv\Scripts\python.exe" "scripts\prepare_ffmpeg.py" --output $VendorFfmpegDir --force
+& ".\.venv\Scripts\python.exe" "scripts\write_windows_version.py" $VersionFile
 
 & ".\.venv\Scripts\pyinstaller.exe" `
     --onefile `
@@ -29,6 +32,7 @@ if (Test-Path "build") {
     --noconfirm `
     --name $Name `
     --icon $IconPath `
+    --version-file $VersionFile `
     --collect-all typer `
     --collect-all click `
     --collect-all rich `
@@ -36,12 +40,13 @@ if (Test-Path "build") {
     --collect-all certifi `
     --hidden-import videomerge.gui `
     --hidden-import tkinter `
-    --add-binary "$VendorFfmpegDir\ffmpeg.exe;ffmpeg" `
-    --add-binary "$VendorFfmpegDir\ffprobe.exe;ffmpeg" `
     main.py
 
 Write-Host ""
 Write-Host "Build complete: $ProjectRoot\dist\$Name.exe"
+New-Item -ItemType Directory -Force -Path (Join-Path $ProjectRoot "dist\ffmpeg") | Out-Null
+Copy-Item (Join-Path $VendorFfmpegDir "ffmpeg.exe") (Join-Path $ProjectRoot "dist\ffmpeg\ffmpeg.exe") -Force
+Copy-Item (Join-Path $VendorFfmpegDir "ffprobe.exe") (Join-Path $ProjectRoot "dist\ffmpeg\ffprobe.exe") -Force
 
 $Inno = Get-Command "ISCC.exe" -ErrorAction SilentlyContinue
 if ($Inno) {
@@ -54,7 +59,7 @@ if ($Inno) {
 [Setup]
 AppId=$AppId
 AppName=$Name
-AppVersion=1.0.0
+AppVersion=$Version
 DefaultDirName={autopf}\$Name
 DefaultGroupName=$Name
 OutputDir=$InstallerDir
@@ -65,6 +70,7 @@ SolidCompression=yes
 
 [Files]
 Source: "$ExePath"; DestDir: "{app}"; Flags: ignoreversion
+Source: "$ProjectRoot\dist\ffmpeg\*"; DestDir: "{app}\ffmpeg"; Flags: ignoreversion recursesubdirs
 
 [Icons]
 Name: "{group}\$Name"; Filename: "{app}\$Name.exe"

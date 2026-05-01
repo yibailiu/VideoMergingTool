@@ -8,7 +8,7 @@ from typing import Any
 
 from .errors import ProbeError
 from .models import Orientation, ToolPaths, VideoFile
-from .utils import parse_fraction
+from .utils import parse_fraction, subprocess_window_kwargs
 
 
 def probe_file(path: Path, tools: ToolPaths, logger: logging.Logger) -> VideoFile:
@@ -29,6 +29,7 @@ def probe_file(path: Path, tools: ToolPaths, logger: logging.Logger) -> VideoFil
         text=True,
         encoding="utf-8",
         errors="replace",
+        **subprocess_window_kwargs(),
     )
     if process.returncode != 0:
         raise ProbeError(process.stderr.strip() or f"ffprobe failed for {path}")

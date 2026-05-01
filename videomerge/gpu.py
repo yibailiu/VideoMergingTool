@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from enum import Enum
 
 from .models import ToolPaths
+from .utils import subprocess_window_kwargs
 
 
 class GpuMode(str, Enum):
@@ -69,15 +70,20 @@ def resolve_gpu_plan(
     return GpuPlan(gpu_mode, None, available, reason)
 
 
-def detect_ffmpeg_encoders(tools: ToolPaths) -> set[str]:
-    process = subprocess.run(
-        [str(tools.ffmpeg), "-hide_banner", "-encoders"],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-    )
+def detect_ffmpeg_encoders(tools: ToolPaths, timeout: int = 5) -> set[str]:
+    try:
+        process = subprocess.run(
+            [str(tools.ffmpeg), "-hide_banner", "-encoders"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=timeout,
+            **subprocess_window_kwargs(),
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return set()
     output = f"{process.stdout}\n{process.stderr}"
     encoders: set[str] = set()
     for line in output.splitlines():

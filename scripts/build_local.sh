@@ -11,6 +11,8 @@ cd "$PROJECT_ROOT"
 python3 -m venv .venv
 ./.venv/bin/python -m pip install --upgrade pip
 ./.venv/bin/python -m pip install -r requirements-build.txt
+VERSION="$(./.venv/bin/python -c 'from videomerge import __version__; print(__version__)')"
+BUNDLE_VERSION="${VERSION%%-*}"
 
 rm -rf build
 
@@ -33,6 +35,7 @@ if [[ "$(uname -s)" == "Darwin" ]]; then
   PYINSTALLER_ARGS+=(
     --windowed
     --icon "$ICON_ICNS"
+    --osx-bundle-identifier "com.videomergingtool.app"
     --add-binary "$VENDOR_FFMPEG_DIR/ffmpeg:ffmpeg"
     --add-binary "$VENDOR_FFMPEG_DIR/ffprobe:ffmpeg"
   )
@@ -52,6 +55,10 @@ echo
 if [[ "$(uname -s)" == "Darwin" && -d "$PROJECT_ROOT/dist/$NAME.app" ]]; then
   DMG_PATH="$PROJECT_ROOT/dist/$NAME.dmg"
   DMG_ROOT="$PROJECT_ROOT/build/dmg-root"
+  INFO_PLIST="$PROJECT_ROOT/dist/$NAME.app/Contents/Info.plist"
+  plutil -replace CFBundleShortVersionString -string "$BUNDLE_VERSION" "$INFO_PLIST"
+  plutil -replace CFBundleVersion -string "$VERSION" "$INFO_PLIST"
+  plutil -replace CFBundleIconName -string "VideoMergingTool" "$INFO_PLIST"
   rm -f "$DMG_PATH"
   rm -rf "$DMG_ROOT"
   mkdir -p "$DMG_ROOT"

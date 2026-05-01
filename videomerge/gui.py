@@ -22,6 +22,8 @@ from .gpu import detect_ffmpeg_encoders
 from .models import MergeMode, Orientation, VideoFile
 from .probe import probe_files
 from .scanner import scan_video_files
+from .utils import subprocess_window_kwargs
+from . import __version__
 
 
 HTML = r"""<!doctype html>
@@ -925,7 +927,7 @@ def _open_desktop_window(url: str) -> None:
             "Desktop GUI requires pywebview. Install dependencies with `pip install -r requirements.txt`."
         ) from exc
 
-    webview.create_window("VideoMergingTool", url, width=1280, height=820, min_size=(900, 620))
+    webview.create_window(f"VideoMergingTool {__version__}", url, width=1280, height=820, min_size=(900, 620))
     webview.start()
 
 
@@ -969,7 +971,7 @@ def _make_handler(state: GuiState):
             try:
                 logger = _gui_logger(state)
                 tools = resolve_tools(logger, True, default_tools_dir())
-                encoders = detect_ffmpeg_encoders(tools)
+                encoders = detect_ffmpeg_encoders(tools, timeout=3)
                 gpu_encoders = sorted(
                     encoder
                     for encoder in encoders
@@ -1182,6 +1184,7 @@ def _terminate_process(process: subprocess.Popen[str]) -> None:
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 check=False,
+                **subprocess_window_kwargs(),
             )
         else:
             os.killpg(process.pid, signal.SIGTERM)
@@ -1201,7 +1204,7 @@ def _terminate_process(process: subprocess.Popen[str]) -> None:
 
 def _process_group_kwargs() -> dict[str, object]:
     if os.name == "nt":
-        return {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
+        return {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP | getattr(subprocess, "CREATE_NO_WINDOW", 0)}
     return {"start_new_session": True}
 
 
@@ -1220,6 +1223,8 @@ def _pick_folder(kind: str) -> str:
     title = "Select output folder" if kind == "output" else "Select source video folder"
     if platform.system() == "Darwin":
         return _pick_folder_macos(title)
+    if platform.system() == "Windows":
+        return _pick_folder_windows(title) or _pick_folder_tk(title)
     return _pick_folder_tk(title)
 
 
@@ -1233,6 +1238,43 @@ def _pick_folder_macos(title: str) -> str:
             text=True,
             encoding="utf-8",
             errors="replace",
+            **subprocess_window_kwargs(),
+        )
+        if result.returncode == 0:
+            return result.stdout.strip()
+    except Exception:
+        return ""
+    return ""
+
+
+def _pick_folder_windows(title: str) -> str:
+    escaped_title = title.replace("'", "''")
+    script = f"""
+Add-Type -AssemblyName System.Windows.Forms
+$dialog = New-Object System.Windows.Forms.OpenFileDialog
+$dialog.Title = '{escaped_title}'
+$dialog.CheckFileExists = $false
+$dialog.ValidateNames = $false
+$dialog.FileName = 'Select this folder'
+$dialog.Filter = 'Folders|*.folder'
+if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {{
+  $selected = $dialog.FileName
+  if (Test-Path -LiteralPath $selected -PathType Container) {{
+    Write-Output $selected
+  }} else {{
+    Write-Output (Split-Path -Parent $selected)
+  }}
+}}
+"""
+    try:
+        result = subprocess.run(
+            ["powershell", "-NoProfile", "-STA", "-ExecutionPolicy", "Bypass", "-Command", script],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            **subprocess_window_kwargs(),
         )
         if result.returncode == 0:
             return result.stdout.strip()
