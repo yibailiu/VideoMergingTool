@@ -22,13 +22,13 @@ jobs:
         include:
           - os: windows-latest
             artifact_name: VideoMergingTool-windows-x64
-            binary_name: VideoMergingTool.exe
+            package_path: dist/installer/VideoMergingTool-Setup.exe
           - os: macos-latest
             artifact_name: VideoMergingTool-macos-arm64
-            binary_name: VideoMergingTool.app
+            package_path: dist/VideoMergingTool.dmg
           - os: ubuntu-latest
             artifact_name: VideoMergingTool-linux-x64
-            binary_name: VideoMergingTool
+            package_path: dist/VideoMergingTool
 
     steps:
       - name: Checkout
@@ -42,58 +42,33 @@ jobs:
       - name: Install build dependencies
         run: python -m pip install -r requirements-build.txt
 
+      - name: Install Inno Setup on Windows
+        if: runner.os == 'Windows'
+        run: choco install innosetup --no-progress -y
+
       - name: Build executable on Windows
         if: runner.os == 'Windows'
-        run: pyinstaller --onefile --windowed --clean --noconfirm --name VideoMergingTool --icon assets/icons/VideoMergingTool.ico --collect-all typer --collect-all click --collect-all rich --collect-all webview --collect-all certifi --hidden-import videomerge.gui --hidden-import tkinter main.py
+        shell: pwsh
+        run: .\scripts\build_windows.ps1
 
       - name: Build app on macOS
         if: runner.os == 'macOS'
-        run: pyinstaller --windowed --clean --noconfirm --name VideoMergingTool --icon assets/icons/VideoMergingTool.icns --collect-all typer --collect-all click --collect-all rich --collect-all webview --collect-all certifi --hidden-import videomerge.gui --hidden-import tkinter main.py
+        run: bash scripts/build_local.sh
 
       - name: Build executable on Linux
         if: runner.os == 'Linux'
-        run: pyinstaller --onefile --windowed --clean --noconfirm --name VideoMergingTool --icon assets/icons/VideoMergingTool.png --collect-all typer --collect-all click --collect-all rich --collect-all webview --collect-all certifi --hidden-import videomerge.gui --hidden-import tkinter main.py
-
-      - name: Prepare artifact on Windows
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Force package
-          Copy-Item "dist\${{ matrix.binary_name }}" "package\${{ matrix.binary_name }}"
-          Copy-Item README.md package\
-          Compress-Archive -Path package\* -DestinationPath "${{ matrix.artifact_name }}.zip" -Force
-
-      - name: Prepare artifact on Unix
-        if: runner.os == 'Linux'
-        shell: bash
-        run: |
-          mkdir -p package
-          cp "dist/${{ matrix.binary_name }}" "package/${{ matrix.binary_name }}"
-          cp README.md package/
-          tar -czf "${{ matrix.artifact_name }}.tar.gz" -C package .
-
-      - name: Prepare artifact on macOS
-        if: runner.os == 'macOS'
-        shell: bash
-        run: |
-          hdiutil create -volname VideoMergingTool -srcfolder "dist/VideoMergingTool.app" -ov -format UDZO "${{ matrix.artifact_name }}.dmg"
+        run: bash scripts/build_local.sh
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact_name }}
-          path: |
-            *.zip
-            *.tar.gz
-            *.dmg
+          path: ${{ matrix.package_path }}
           if-no-files-found: error
 
       - name: Upload release asset
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          files: |
-            *.zip
-            *.tar.gz
-            *.dmg
+          files: ${{ matrix.package_path }}
           generate_release_notes: true

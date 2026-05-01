@@ -7,6 +7,7 @@ $ErrorActionPreference = "Stop"
 $ProjectRoot = Resolve-Path "$PSScriptRoot\.."
 Set-Location $ProjectRoot
 $IconPath = Join-Path $ProjectRoot "assets\icons\VideoMergingTool.ico"
+$VendorFfmpegDir = Join-Path $ProjectRoot "build\vendor\ffmpeg"
 
 if (-not (Test-Path ".venv")) {
     python -m venv .venv
@@ -18,6 +19,8 @@ if (-not (Test-Path ".venv")) {
 if (Test-Path "build") {
     Remove-Item -Recurse -Force "build"
 }
+
+& ".\.venv\Scripts\python.exe" "scripts\prepare_ffmpeg.py" --output $VendorFfmpegDir --force
 
 & ".\.venv\Scripts\pyinstaller.exe" `
     --onefile `
@@ -33,6 +36,8 @@ if (Test-Path "build") {
     --collect-all certifi `
     --hidden-import videomerge.gui `
     --hidden-import tkinter `
+    --add-binary "$VendorFfmpegDir\ffmpeg.exe;ffmpeg" `
+    --add-binary "$VendorFfmpegDir\ffprobe.exe;ffmpeg" `
     main.py
 
 Write-Host ""

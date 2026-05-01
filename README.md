@@ -4,7 +4,7 @@
 
 本地批量视频智能合并工具。当前版本提供可点击启动的桌面 GUI，同时保留 CLI；内部模块按扫描、探测、分组、转码、合并拆分。
 
-底层依赖 FFmpeg / FFprobe。程序启动时会优先查找已下载的本地二进制和系统已有二进制；缺失时默认尝试下载安装到可写目录，避免普通用户手动配置环境变量。
+桌面安装包内置精简 FFmpeg / FFprobe 二进制，普通用户安装后即可使用，不需要手动配置环境变量。
 
 ## 功能
 
@@ -22,11 +22,11 @@
 
 ## 普通用户用法
 
-推荐直接下载 GitHub Release 里的安装包或压缩包。
+推荐直接下载 GitHub Release 里的安装包。
 
-- Windows：运行 `VideoMergingTool.exe`，或使用 `VideoMergingTool-Setup.exe` 安装后从开始菜单/桌面图标启动。
+- Windows：运行 `VideoMergingTool-Setup.exe` 安装后从开始菜单/桌面图标启动。
 - macOS：打开 `VideoMergingTool.dmg`，将 `VideoMergingTool.app` 拖入 Applications 后从图标启动。
-- Linux：解压后运行 `VideoMergingTool`。
+- Linux：运行 `VideoMergingTool`。
 
 桌面应用和安装包会使用 `assets/icons/VideoMergingTool.*` 中的应用图标。
 
@@ -44,7 +44,7 @@ macOS / Linux CLI 示例：
 ./VideoMergingTool merge ~/Videos --mode fast
 ```
 
-如果当前机器没有 FFmpeg / FFprobe，程序会默认尝试自动下载。源码运行时下载到当前运行目录的 `.tools/ffmpeg`；打包后的桌面应用会下载到用户可写的应用数据目录，避免 macOS app 只读目录报错。
+源码运行时仍会在缺少 FFmpeg / FFprobe 时尝试下载到当前运行目录的 `.tools/ffmpeg`。打包后的桌面应用优先使用应用内置的 FFmpeg / FFprobe。
 
 ## 开发者运行方式
 
@@ -164,13 +164,14 @@ Extreme 模式对全部文件选择一个最终画布和编码策略，消解 ro
 
 如果文件已存在且未传 `--overwrite`，会自动追加 `_1`、`_2` 等后缀。
 
-## 依赖自动检测和下载
+## FFmpeg 检测
 
 默认行为：
 
-1. 查找本地工具目录。源码运行时是 `./.tools/ffmpeg`，打包应用是用户应用数据目录。
-2. 查找系统 `PATH`
-3. 如果缺失，尝试下载静态 FFmpeg/FFprobe。源码运行时使用 `./.tools/ffmpeg`，打包应用使用用户应用数据目录。
+1. 打包应用优先使用应用内置的 `ffmpeg` / `ffprobe`
+2. 源码运行时查找本地工具目录 `./.tools/ffmpeg`
+3. 查找系统 `PATH` 和常见安装路径
+4. 源码运行时如果仍缺失，尝试下载静态 FFmpeg / FFprobe
 
 自动下载地址按平台选择：
 
@@ -178,7 +179,7 @@ Extreme 模式对全部文件选择一个最终画布和编码策略，消解 ro
 - Windows: gyan.dev FFmpeg essentials build
 - Linux: johnvansickle.com static build
 
-如果网络不可用或下载源不可达，可以手动安装 FFmpeg，或用 `--ffmpeg-path` 和 `--ffprobe-path` 指定二进制路径。
+如果源码运行时网络不可用或下载源不可达，可以手动安装 FFmpeg，或用 `--ffmpeg-path` 和 `--ffprobe-path` 指定二进制路径。
 
 ## 本地打包为独立可执行文件
 
@@ -192,7 +193,7 @@ Windows PowerShell:
 
 ```text
 dist\VideoMergingTool.exe
-dist\installer\VideoMergingTool-Setup.exe   # 已安装 Inno Setup 时生成
+dist\installer\VideoMergingTool-Setup.exe
 ```
 
 macOS / Linux:
@@ -220,7 +221,7 @@ dist/VideoMergingTool       # Linux
 自动行为：
 
 - 推送到 `main`：自动构建 Windows、macOS、Linux 三个平台的可执行文件，并上传到 Actions Artifacts
-- 推送版本 tag，例如 `v0.1.0`：自动构建三个平台，并创建 GitHub Release，附带压缩包
+- 推送版本 tag，例如 `v0.1.0`：自动构建三个平台，并创建 GitHub Release，附带 `.dmg`、Windows 安装 `.exe` 和 Linux 可执行文件
 - 手动触发 workflow：可在 GitHub Actions 页面点击 `Run workflow`
 
 发布新版本：
@@ -232,9 +233,9 @@ git push origin v0.1.0
 
 发布后，用户可以在 GitHub 仓库的 Releases 页面下载：
 
-- `VideoMergingTool-windows-x64.zip`
-- `VideoMergingTool-macos-arm64.tar.gz`
-- `VideoMergingTool-linux-x64.tar.gz`
+- `VideoMergingTool-Setup.exe`
+- `VideoMergingTool.dmg`
+- `VideoMergingTool`
 
 ## 平台说明
 

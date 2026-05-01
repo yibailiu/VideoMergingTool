@@ -22,6 +22,24 @@ class EnvCheckTests(unittest.TestCase):
 
         self.assertEqual(found, binary)
 
+    def test_find_binary_prefers_bundled_binary_in_frozen_app(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            bundled = Path(temp_dir) / "ffmpeg" / "ffmpeg"
+            bundled.parent.mkdir()
+            bundled.touch()
+
+            with patch("videomerge.env_check.sys.frozen", True, create=True), patch(
+                "videomerge.env_check.sys._MEIPASS",
+                temp_dir,
+                create=True,
+            ), patch("videomerge.env_check.shutil.which", return_value=None), patch(
+                "videomerge.env_check._system_binary_candidates",
+                return_value=[],
+            ):
+                found = _find_binary("ffmpeg", Path(temp_dir) / "missing-tools")
+
+        self.assertEqual(found, bundled)
+
 
 if __name__ == "__main__":
     unittest.main()

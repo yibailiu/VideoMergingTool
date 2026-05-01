@@ -110,6 +110,9 @@ def download_ffmpeg_tools(tools_dir: Path, logger: logging.Logger) -> ToolPaths:
 
 def _find_binary(name: str, tools_dir: Path) -> Path | None:
     local_name = f"{name}.exe" if platform.system() == "Windows" else name
+    bundled = _bundled_binary(local_name)
+    if bundled:
+        return bundled
     local = tools_dir / local_name
     if local.exists():
         return local
@@ -117,6 +120,20 @@ def _find_binary(name: str, tools_dir: Path) -> Path | None:
     if found:
         return Path(found)
     for candidate in _system_binary_candidates(name):
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def _bundled_binary(local_name: str) -> Path | None:
+    if not getattr(sys, "frozen", False):
+        return None
+    base = Path(getattr(sys, "_MEIPASS", Path(sys.executable).parent))
+    for candidate in (
+        base / "ffmpeg" / local_name,
+        base / local_name,
+        Path(sys.executable).resolve().parent / "ffmpeg" / local_name,
+    ):
         if candidate.exists():
             return candidate
     return None
@@ -153,7 +170,7 @@ def _system_binary_candidates(name: str) -> list[Path]:
 def _download(url: str, output: Path, logger: logging.Logger) -> None:
     logger.info("Downloading %s", url)
     try:
-        with urllib.request.urlopen(url, context=_ssl_context()) as response, output.open("wb") as file:
+        with urllib.request.urlopen(url, context=_ssl_context(), timeout=60) as response, output.open("wb") as file:
             shutil.copyfileobj(response, file)
     except Exception as exc:  # pragma: no cover - depends on network.
         raise DependencyError(f"Failed to download {url}: {exc}") from exc
