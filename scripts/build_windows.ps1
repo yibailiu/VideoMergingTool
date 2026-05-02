@@ -60,7 +60,8 @@ if ($Inno) {
 AppId=$AppId
 AppName=$Name
 AppVersion=$Version
-DefaultDirName={autopf}\$Name
+PrivilegesRequired=lowest
+DefaultDirName={localappdata}\Programs\$Name
 DefaultGroupName=$Name
 OutputDir=$InstallerDir
 OutputBaseFilename=$Name-Setup

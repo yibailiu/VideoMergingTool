@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from videomerge.gui import _load_gui_config, _normalize_picked_folder, _pick_folder, _save_gui_config
+from videomerge.gui import _default_display_paths, _load_gui_config, _normalize_picked_folder, _pick_folder, _save_gui_config
 
 
 class GuiFolderPickerTests(unittest.TestCase):
@@ -43,7 +43,7 @@ class GuiFolderPickerTests(unittest.TestCase):
         pick_macos.assert_called_once_with("Select output folder")
         pick_tk.assert_not_called()
 
-    def test_config_save_excludes_selected_folders(self) -> None:
+    def test_config_save_keeps_custom_output_and_temp_but_not_name_or_source(self) -> None:
         with patch("videomerge.gui._config_path", return_value=Path("/tmp/vmt-test-config.json")) as config_path:
             path = config_path.return_value
             try:
@@ -52,6 +52,7 @@ class GuiFolderPickerTests(unittest.TestCase):
                         "lang": "zh",
                         "mode": "fast",
                         "format": "mkv",
+                        "name": "DoNotRemember",
                         "inputDir": "/private/source",
                         "outputDir": "/private/output",
                         "tempDir": "/private/temp",
@@ -64,9 +65,10 @@ class GuiFolderPickerTests(unittest.TestCase):
         self.assertEqual(loaded["lang"], "zh")
         self.assertEqual(loaded["mode"], "fast")
         self.assertEqual(loaded["format"], "mkv")
+        self.assertEqual(loaded["outputDir"], "/private/output")
+        self.assertEqual(loaded["tempDir"], "/private/temp")
+        self.assertNotIn("name", loaded)
         self.assertNotIn("inputDir", loaded)
-        self.assertNotIn("outputDir", loaded)
-        self.assertNotIn("tempDir", loaded)
 
     def test_windows_picker_does_not_hide_files_with_folder_filter(self) -> None:
         commands = []
@@ -91,6 +93,15 @@ class GuiFolderPickerTests(unittest.TestCase):
             _normalize_picked_folder("C:/Videos/Select this folder"),
             "C:/Videos",
         )
+
+    def test_default_display_paths_include_temp_and_source_output_folder(self) -> None:
+        with patch("videomerge.gui.resolve_tools", side_effect=RuntimeError("missing")):
+            defaults = _default_display_paths("/tmp")
+
+        self.assertEqual(defaults["output_dir"], "/tmp/merged")
+        self.assertTrue(defaults["temp_dir"])
+        self.assertIn("ffmpeg", defaults)
+        self.assertIn("ffprobe", defaults)
 
 
 if __name__ == "__main__":

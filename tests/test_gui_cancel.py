@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import unittest
+from pathlib import Path
 from unittest.mock import Mock, patch
 
-from videomerge.gui import GuiState
+from videomerge.gui import GuiState, _cleanup_cancel_temp_dirs
 
 
 class GuiCancelTests(unittest.TestCase):
@@ -34,6 +35,26 @@ class GuiCancelTests(unittest.TestCase):
 
         process = Mock()
         self.assertTrue(state.start_process(process))
+
+    def test_cancel_cleanup_removes_recorded_temp_dirs_when_keep_temp_is_disabled(self) -> None:
+        state = GuiState()
+        state.begin_run(cleanup_temp_on_cancel=True)
+        state.record_temp_path(Path("/tmp/videomerge_preprocess_test"))
+
+        with patch("videomerge.gui.Path.exists", return_value=True), patch("videomerge.gui.shutil.rmtree") as rmtree:
+            _cleanup_cancel_temp_dirs(state)
+
+        rmtree.assert_called_once_with(Path("/tmp/videomerge_preprocess_test"))
+
+    def test_cancel_cleanup_skips_when_keep_temp_is_enabled(self) -> None:
+        state = GuiState()
+        state.begin_run(cleanup_temp_on_cancel=False)
+        state.record_temp_path(Path("/tmp/videomerge_preprocess_test"))
+
+        with patch("videomerge.gui.shutil.rmtree") as rmtree:
+            _cleanup_cancel_temp_dirs(state)
+
+        rmtree.assert_not_called()
 
 
 if __name__ == "__main__":

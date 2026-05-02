@@ -5,10 +5,12 @@ import logging
 import os
 import platform
 import re
+import shutil
 import signal
 import socket
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from http import HTTPStatus
@@ -27,7 +29,8 @@ from . import __version__
 
 
 CONFIG_FIELD_IDS = [
-    "name",
+    "outputDir",
+    "tempDir",
     "format",
     "sortBy",
     "codec",
@@ -76,6 +79,10 @@ HTML = r"""<!doctype html>
       --font-mono: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, Courier, monospace;
     }
     * { box-sizing: border-box; margin: 0; padding: 0; }
+    * {
+      user-select: text;
+      -webkit-user-select: text;
+    }
     body {
       background: var(--bg-body);
       color: var(--text-primary);
@@ -85,6 +92,10 @@ HTML = r"""<!doctype html>
       min-width: 900px;
       overflow: hidden;
       -webkit-font-smoothing: antialiased;
+    }
+    button, select, input[type="checkbox"], .mode-card, .info {
+      user-select: none;
+      -webkit-user-select: none;
     }
     ::-webkit-scrollbar { width: 8px; height: 8px; }
     ::-webkit-scrollbar-track { background: transparent; }
@@ -592,8 +603,10 @@ HTML = r"""<!doctype html>
       running: false,
       statusTimer: null,
       lang: "en",
-      deps: { status: "notChecked", message: "" }
+      deps: { status: "notChecked", message: "" },
+      defaults: {}
     };
+    const pathFields = ["outputDir", "tempDir", "ffmpegPath", "ffprobePath"];
     const $ = (id) => document.getElementById(id);
     const t = (key, values = {}) => {
       let text = (messages[state.lang] && messages[state.lang][key]) || messages.en[key] || key;
@@ -651,9 +664,10 @@ HTML = r"""<!doctype html>
     }
     function readConfig() {
       const values = { lang: state.lang, mode: state.mode };
-      const ids = ["name", "format", "sortBy", "codec", "gpu", "audioCodec", "crf", "preset", "fpsPolicy", "resolutionPolicy", "padColor", "ffmpegPath", "ffprobePath", "recursive", "overwrite", "dryRun", "keepTemp", "autoDownloadDeps"];
+      const ids = ["format", "sortBy", "codec", "gpu", "audioCodec", "crf", "preset", "fpsPolicy", "resolutionPolicy", "padColor", "outputDir", "tempDir", "ffmpegPath", "ffprobePath", "recursive", "overwrite", "dryRun", "keepTemp", "autoDownloadDeps"];
       ids.forEach(id => {
         const node = $(id);
+        if (pathFields.includes(id) && node.dataset.custom !== "true") return;
         values[id] = node.type === "checkbox" ? node.checked : node.value;
       });
       return values;
@@ -665,6 +679,7 @@ HTML = r"""<!doctype html>
       Object.entries(config).forEach(([id, value]) => {
         const node = $(id);
         if (!node) return;
+        if (pathFields.includes(id)) node.dataset.custom = value ? "true" : "false";
         if (node.type === "checkbox") node.checked = Boolean(value);
         else node.value = value;
       });
@@ -679,11 +694,39 @@ HTML = r"""<!doctype html>
         try { await api("/config", readConfig()); } catch (error) { log(`ERROR: ${error.message}`); }
       }, 250);
     }
+    function applyDefaultPaths() {
+      const mapping = {
+        outputDir: "output_dir",
+        tempDir: "temp_dir",
+        ffmpegPath: "ffmpeg",
+        ffprobePath: "ffprobe"
+      };
+      pathFields.forEach(id => {
+        const node = $(id);
+        if (node.dataset.custom === "true") return;
+        node.value = state.defaults[mapping[id]] || "";
+      });
+    }
+    async function refreshDefaultPaths() {
+      try {
+        state.defaults = await api("/defaults", { input_dir: state.inputDir });
+        applyDefaultPaths();
+      } catch (error) {
+        log(`ERROR: ${error.message}`);
+      }
+    }
+    function configPathValue(id) {
+      const node = $(id);
+      return node.dataset.custom === "true" ? node.value : "";
+    }
     async function checkDeps() {
       state.deps = { status: "checking", message: "" };
       renderDepStatus();
       try {
         const payload = await api("/deps");
+        state.defaults.ffmpeg = payload.ffmpeg || state.defaults.ffmpeg || "";
+        state.defaults.ffprobe = payload.ffprobe || state.defaults.ffprobe || "";
+        applyDefaultPaths();
         state.deps = {
           status: payload.ok ? "installed" : "missing",
           message: payload.message || ""
@@ -755,9 +798,13 @@ HTML = r"""<!doctype html>
         }
         if (kind === "source") {
           state.inputDir = result.path;
+          await refreshDefaultPaths();
           await scan();
         } else {
-          $(kind === "temp" ? "tempDir" : "outputDir").value = result.path;
+          const id = kind === "temp" ? "tempDir" : "outputDir";
+          $(id).value = result.path;
+          $(id).dataset.custom = "true";
+          scheduleSaveConfig();
         }
       } catch (error) { log(`ERROR: ${error.message}`); }
     }
@@ -792,7 +839,7 @@ HTML = r"""<!doctype html>
           input_dir: state.inputDir,
           mode: state.mode,
           name: $("name").value,
-          output_dir: $("outputDir").value,
+          output_dir: configPathValue("outputDir"),
           output_format: $("format").value,
           sort_by: $("sortBy").value,
           video_codec: $("codec").value,
@@ -803,9 +850,9 @@ HTML = r"""<!doctype html>
           fps_policy: $("fpsPolicy").value,
           resolution_policy: $("resolutionPolicy").value,
           pad_color: $("padColor").value,
-          ffmpeg_path: $("ffmpegPath").value,
-          ffprobe_path: $("ffprobePath").value,
-          temp_dir: $("tempDir").value,
+          ffmpeg_path: configPathValue("ffmpegPath"),
+          ffprobe_path: configPathValue("ffprobePath"),
+          temp_dir: configPathValue("tempDir"),
           recursive: $("recursive").checked,
           overwrite: $("overwrite").checked,
           dry_run: $("dryRun").checked,
@@ -856,8 +903,14 @@ HTML = r"""<!doctype html>
       if (state.files.length) renderFiles(state.files);
       scheduleSaveConfig();
     });
-    ["name", "format", "sortBy", "codec", "gpu", "audioCodec", "crf", "preset", "fpsPolicy", "resolutionPolicy", "padColor", "ffmpegPath", "ffprobePath", "recursive", "overwrite", "dryRun", "keepTemp", "autoDownloadDeps"].forEach(id => {
+    ["format", "sortBy", "codec", "gpu", "audioCodec", "crf", "preset", "fpsPolicy", "resolutionPolicy", "padColor", "outputDir", "tempDir", "ffmpegPath", "ffprobePath", "recursive", "overwrite", "dryRun", "keepTemp", "autoDownloadDeps"].forEach(id => {
       const node = $(id);
+      if (pathFields.includes(id)) {
+        node.addEventListener("input", () => {
+          node.dataset.custom = node.value.trim() ? "true" : "false";
+          if (node.dataset.custom !== "true") refreshDefaultPaths();
+        });
+      }
       node.addEventListener(node.type === "checkbox" ? "change" : "input", scheduleSaveConfig);
       node.addEventListener("change", scheduleSaveConfig);
     });
@@ -885,6 +938,7 @@ HTML = r"""<!doctype html>
     });
     (async () => {
       await loadConfig();
+      await refreshDefaultPaths();
       applyLanguage();
       log(t("selectBegin"));
       checkDeps();
@@ -902,6 +956,8 @@ class GuiState:
         self.running = False
         self.cancel_requested = False
         self.process: subprocess.Popen[str] | None = None
+        self.cleanup_temp_on_cancel = True
+        self.temp_paths: list[Path] = []
         self.lock = threading.Lock()
 
     def log(self, message: str) -> None:
@@ -918,7 +974,7 @@ class GuiState:
         with self.lock:
             return {"logs": list(self.logs), "progress": self.progress, "running": self.running}
 
-    def begin_run(self) -> bool:
+    def begin_run(self, cleanup_temp_on_cancel: bool = True) -> bool:
         with self.lock:
             if self.running:
                 return False
@@ -927,6 +983,8 @@ class GuiState:
             self.running = True
             self.cancel_requested = False
             self.process = None
+            self.cleanup_temp_on_cancel = cleanup_temp_on_cancel
+            self.temp_paths.clear()
             return True
 
     def start_process(self, process: subprocess.Popen[str]) -> bool:
@@ -952,6 +1010,18 @@ class GuiState:
             self.running = False
             self.cancel_requested = False
             return was_cancelled
+
+    def record_temp_path(self, path: Path) -> None:
+        with self.lock:
+            if path not in self.temp_paths:
+                self.temp_paths.append(path)
+
+    def consume_cancel_cleanup_paths(self) -> list[Path]:
+        with self.lock:
+            paths = list(self.temp_paths) if self.cleanup_temp_on_cancel else []
+            self.temp_paths.clear()
+            self.cleanup_temp_on_cancel = True
+            return paths
 
 
 class QueueLogHandler(logging.Handler):
@@ -1015,6 +1085,9 @@ def _make_handler(state: GuiState):
             if parsed.path == "/config":
                 self._send_json(_load_gui_config())
                 return
+            if parsed.path == "/defaults":
+                self._send_json(_default_display_paths())
+                return
             self._send_json({"error": "Not found"}, HTTPStatus.NOT_FOUND)
 
         def do_POST(self) -> None:
@@ -1032,6 +1105,9 @@ def _make_handler(state: GuiState):
             if parsed.path == "/config":
                 _save_gui_config(payload)
                 self._send_json({"ok": True})
+                return
+            if parsed.path == "/defaults":
+                self._send_json(_default_display_paths(str(payload.get("input_dir") or "")))
                 return
             self._send_json({"error": "Not found"}, HTTPStatus.NOT_FOUND)
 
@@ -1085,7 +1161,7 @@ def _make_handler(state: GuiState):
                 self._send_json({"error": str(exc)}, HTTPStatus.INTERNAL_SERVER_ERROR)
 
         def _merge(self, payload: dict[str, object]) -> None:
-            if not state.begin_run():
+            if not state.begin_run(cleanup_temp_on_cancel=not bool(payload.get("keep_temp"))):
                 self._send_json({"error": "A merge is already running."}, HTTPStatus.CONFLICT)
                 return
             command = _build_merge_command(payload)
@@ -1228,6 +1304,9 @@ def _run_merge(command: list[str], state: GuiState) -> None:
         for line in process.stdout:
             stripped = line.rstrip()
             state.log(stripped)
+            temp_match = re.search(r"(?:Preprocessing|Concat) temp directory:\s+(.+)$", stripped)
+            if temp_match:
+                state.record_temp_path(Path(temp_match.group(1).strip()))
             progress_match = re.search(r"Progress:\s+(\d+)/(\d+)\s+\((\d+)%\)", stripped)
             if progress_match:
                 state.set_progress(int(progress_match.group(3)))
@@ -1235,6 +1314,7 @@ def _run_merge(command: list[str], state: GuiState) -> None:
         was_cancelled = state.finish_process()
         if was_cancelled:
             state.log("Merge stopped by user.")
+            _cleanup_cancel_temp_dirs(state)
         elif code == 0:
             state.set_progress(100)
             state.log("Merge completed.")
@@ -1244,6 +1324,21 @@ def _run_merge(command: list[str], state: GuiState) -> None:
         state.log(f"ERROR: {exc}")
     finally:
         state.finish_process()
+
+
+def _cleanup_cancel_temp_dirs(state: GuiState) -> None:
+    cleaned = 0
+    for path in state.consume_cancel_cleanup_paths():
+        if not path.name.startswith(("videomerge_preprocess_", "videomerge_concat_")):
+            state.log(f"Skipped unsafe temp cleanup path: {path}")
+            continue
+        try:
+            if path.exists():
+                shutil.rmtree(path)
+                cleaned += 1
+        except Exception as exc:
+            state.log(f"WARNING: Temporary cleanup failed: {path} | {exc}")
+    state.log(f"Temporary files cleaned after stop: {cleaned} folder(s).")
 
 
 def _terminate_process(process: subprocess.Popen[str]) -> None:
@@ -1367,7 +1462,36 @@ def _normalize_picked_folder(path_text: str) -> str:
     return str(path)
 
 
+def _default_display_paths(input_dir: str = "") -> dict[str, str]:
+    defaults = {
+        "output_dir": "",
+        "temp_dir": tempfile.gettempdir(),
+        "ffmpeg": "",
+        "ffprobe": "",
+    }
+    if input_dir:
+        candidate = Path(input_dir)
+        if candidate.is_dir():
+            defaults["output_dir"] = str(candidate / "merged")
+
+    logger = logging.getLogger("videomerge.gui.defaults")
+    logger.handlers.clear()
+    logger.addHandler(logging.NullHandler())
+    logger.propagate = False
+    try:
+        tools = resolve_tools(logger, False, default_tools_dir())
+        defaults["ffmpeg"] = str(tools.ffmpeg)
+        defaults["ffprobe"] = str(tools.ffprobe)
+    except Exception:
+        pass
+    return defaults
+
+
 def _config_dir() -> Path:
+    frozen_dir = _frozen_writable_config_dir()
+    if frozen_dir:
+        return frozen_dir
+
     system = platform.system()
     if system == "Darwin":
         return Path.home() / "Library" / "Application Support" / "VideoMergingTool"
@@ -1375,6 +1499,23 @@ def _config_dir() -> Path:
         root = os.environ.get("APPDATA") or os.environ.get("LOCALAPPDATA")
         return Path(root) / "VideoMergingTool" if root else Path.home() / "AppData" / "Roaming" / "VideoMergingTool"
     return Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "VideoMergingTool"
+
+
+def _frozen_writable_config_dir() -> Path | None:
+    if not getattr(sys, "frozen", False):
+        return None
+    if platform.system() == "Darwin":
+        return None
+
+    candidate = Path(sys.executable).resolve().parent / "config"
+    try:
+        candidate.mkdir(parents=True, exist_ok=True)
+        probe = candidate / ".write-test"
+        probe.write_text("ok", encoding="utf-8")
+        probe.unlink(missing_ok=True)
+        return candidate
+    except OSError:
+        return None
 
 
 def _config_path() -> Path:
