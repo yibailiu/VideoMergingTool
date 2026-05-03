@@ -32,6 +32,10 @@
 
 打包后的桌面应用无参数启动时会直接打开 GUI，不需要命令行，也不会调用外部浏览器。
 
+### 系统安全提示
+
+未签名安装包无法完全绕过 Windows SmartScreen 或 macOS Gatekeeper。要让 Windows 安装包不再出现发布者未知/安全提示，需要使用 Authenticode 代码签名证书签名 `.exe` 和安装包；要让 macOS 应用无需用户手动在“安全性与隐私”中放行，需要使用 Apple Developer ID 签名并完成 notarization。当前打包脚本支持在配置证书后签名；未配置证书时会继续生成可测试的未签名包。
+
 仍然可以直接使用命令行：
 
 ```powershell

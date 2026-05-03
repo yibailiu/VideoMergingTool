@@ -6,6 +6,7 @@ PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ICON_PNG="$PROJECT_ROOT/assets/icons/VideoMergingTool.png"
 ICON_ICNS="$PROJECT_ROOT/assets/icons/VideoMergingTool.icns"
 VENDOR_FFMPEG_DIR="$PROJECT_ROOT/build/vendor/ffmpeg"
+MACOS_CODESIGN_IDENTITY="${MACOS_CODESIGN_IDENTITY:--}"
 cd "$PROJECT_ROOT"
 
 python3 -m venv .venv
@@ -60,7 +61,11 @@ if [[ "$(uname -s)" == "Darwin" && -d "$PROJECT_ROOT/dist/$NAME.app" ]]; then
   plutil -replace CFBundleVersion -string "$VERSION" "$INFO_PLIST"
   plutil -replace CFBundleIconFile -string "VideoMergingTool.icns" "$INFO_PLIST"
   plutil -remove CFBundleIconName "$INFO_PLIST" 2>/dev/null || true
-  codesign --force --deep --sign - "$PROJECT_ROOT/dist/$NAME.app"
+  CODESIGN_ARGS=(--force --deep --sign "$MACOS_CODESIGN_IDENTITY")
+  if [[ "$MACOS_CODESIGN_IDENTITY" != "-" ]]; then
+    CODESIGN_ARGS+=(--options runtime --timestamp)
+  fi
+  codesign "${CODESIGN_ARGS[@]}" "$PROJECT_ROOT/dist/$NAME.app"
   touch "$PROJECT_ROOT/dist/$NAME.app"
   rm -f "$DMG_PATH"
   rm -rf "$DMG_ROOT"

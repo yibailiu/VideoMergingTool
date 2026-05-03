@@ -18,6 +18,26 @@ if (-not (Test-Path ".venv")) {
 $Version = (& ".\.venv\Scripts\python.exe" -c "from videomerge import __version__; print(__version__)").Trim()
 $VersionFile = Join-Path $ProjectRoot "build\version_info.txt"
 
+function Invoke-WindowsSigning {
+    param([string]$Path)
+
+    if (-not $env:WINDOWS_CERTIFICATE_BASE64 -or -not $env:WINDOWS_CERTIFICATE_PASSWORD) {
+        Write-Host "Windows code signing skipped: certificate secrets are not configured."
+        return
+    }
+
+    $SignTool = Get-Command "signtool.exe" -ErrorAction SilentlyContinue
+    if (-not $SignTool) {
+        Write-Host "Windows code signing skipped: signtool.exe was not found."
+        return
+    }
+
+    $CertPath = Join-Path ([System.IO.Path]::GetTempPath()) "videomergingtool-signing.pfx"
+    [System.IO.File]::WriteAllBytes($CertPath, [Convert]::FromBase64String($env:WINDOWS_CERTIFICATE_BASE64))
+    & $SignTool.Source sign /fd SHA256 /td SHA256 /tr "http://timestamp.digicert.com" /f $CertPath /p $env:WINDOWS_CERTIFICATE_PASSWORD $Path
+    Remove-Item -Force $CertPath
+}
+
 if (Test-Path "build") {
     Remove-Item -Recurse -Force "build"
 }
@@ -44,6 +64,7 @@ if (Test-Path "build") {
 
 Write-Host ""
 Write-Host "Build complete: $ProjectRoot\dist\$Name.exe"
+Invoke-WindowsSigning -Path (Join-Path $ProjectRoot "dist\$Name.exe")
 New-Item -ItemType Directory -Force -Path (Join-Path $ProjectRoot "dist\ffmpeg") | Out-Null
 Copy-Item (Join-Path $VendorFfmpegDir "ffmpeg.exe") (Join-Path $ProjectRoot "dist\ffmpeg\ffmpeg.exe") -Force
 Copy-Item (Join-Path $VendorFfmpegDir "ffprobe.exe") (Join-Path $ProjectRoot "dist\ffmpeg\ffprobe.exe") -Force
@@ -75,12 +96,13 @@ Source: "$ProjectRoot\dist\ffmpeg\*"; DestDir: "{app}\ffmpeg"; Flags: ignorevers
 
 [Icons]
 Name: "{group}\$Name"; Filename: "{app}\$Name.exe"
-Name: "{commondesktop}\$Name"; Filename: "{app}\$Name.exe"; Tasks: desktopicon
+Name: "{userdesktop}\$Name"; Filename: "{app}\$Name.exe"; Tasks: desktopicon
 
 [Tasks]
 Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Additional icons:"
 "@ | Set-Content -Path $IssPath -Encoding UTF8
     & $Inno.Source $IssPath
+    Invoke-WindowsSigning -Path (Join-Path $InstallerDir "$Name-Setup.exe")
     Write-Host "Installer complete: $InstallerDir\$Name-Setup.exe"
 } else {
     Write-Host "Inno Setup was not found; installer generation skipped."
