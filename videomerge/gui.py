@@ -13,6 +13,7 @@ import sys
 import tempfile
 import threading
 import time
+import webbrowser
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -26,6 +27,9 @@ from .probe import probe_files
 from .scanner import scan_video_files
 from .utils import subprocess_window_kwargs
 from . import __version__
+
+
+REPOSITORY_URL = "https://github.com/yibailiu/VideoMergingTool"
 
 
 CONFIG_FIELD_IDS = [
@@ -93,7 +97,7 @@ HTML = r"""<!doctype html>
       overflow: hidden;
       -webkit-font-smoothing: antialiased;
     }
-    button, select, input[type="checkbox"], .mode-card, .info {
+    button, select, input[type="checkbox"], .mode-card, .info, .version-chip {
       user-select: none;
       -webkit-user-select: none;
     }
@@ -109,8 +113,28 @@ HTML = r"""<!doctype html>
       padding: 0 24px;
       background: var(--bg-body);
     }
+    .brand { display: flex; align-items: center; gap: 10px; min-width: 0; }
     .logo { font-size: 18px; font-weight: 800; letter-spacing: -.03em; display: flex; align-items: center; gap: 8px; }
     .logo-dot { width: 6px; height: 6px; background: var(--accent-red); border-radius: 50%; }
+    .version-chip {
+      color: var(--text-secondary);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-pill);
+      padding: 3px 8px;
+      font-size: 11px;
+      font-weight: 800;
+      line-height: 1;
+    }
+    .github-button {
+      width: 30px;
+      height: 30px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      padding: 0;
+      color: var(--text-secondary);
+    }
+    .github-button svg { width: 16px; height: 16px; fill: currentColor; }
     .dep-badge {
       color: var(--accent-green);
       background: var(--bg-panel);
@@ -395,7 +419,13 @@ HTML = r"""<!doctype html>
 </head>
 <body>
   <header>
-    <div class="logo">VIDEO MERGE <span class="logo-dot"></span></div>
+    <div class="brand">
+      <div class="logo">VIDEO MERGE <span class="logo-dot"></span></div>
+      <span class="version-chip">v__APP_VERSION__</span>
+      <button class="btn-icon github-button" id="githubLink" type="button" title="GitHub Repository" aria-label="GitHub Repository">
+        <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.67 0 8.2c0 3.62 2.29 6.69 5.47 7.78.4.08.55-.18.55-.4 0-.2-.01-.84-.01-1.52-2.01.38-2.53-.5-2.69-.97-.09-.24-.48-.97-.82-1.17-.28-.15-.68-.52-.01-.53.63-.01 1.08.59 1.23.83.72 1.24 1.87.89 2.33.68.07-.53.28-.89.51-1.09-1.78-.21-3.64-.91-3.64-4.03 0-.89.31-1.62.82-2.19-.08-.21-.36-1.04.08-2.16 0 0 .67-.22 2.2.84A7.4 7.4 0 0 1 8 4c.68 0 1.36.09 1.99.27 1.53-1.06 2.2-.84 2.2-.84.44 1.12.16 1.95.08 2.16.51.57.82 1.3.82 2.19 0 3.13-1.87 3.82-3.65 4.03.29.26.54.75.54 1.52 0 1.09-.01 1.98-.01 2.25 0 .22.15.48.55.4A8.12 8.12 0 0 0 16 8.2C16 3.67 12.42 0 8 0Z"/></svg>
+      </button>
+    </div>
     <div class="header-actions">
       <select class="language-select" id="languageSelect" title="Switch language">
         <option value="en">English</option>
@@ -897,6 +927,9 @@ HTML = r"""<!doctype html>
     $("selectTemp").addEventListener("click", () => selectFolder("temp"));
     $("refresh").addEventListener("click", scan);
     $("startMerge").addEventListener("click", merge);
+    $("githubLink").addEventListener("click", async () => {
+      try { await api("/open-url", { url: "__REPOSITORY_URL__" }); } catch (error) { log(`ERROR: ${error.message}`); }
+    });
     $("languageSelect").addEventListener("change", () => {
       state.lang = $("languageSelect").value;
       applyLanguage();
@@ -1109,13 +1142,16 @@ def _make_handler(state: GuiState):
             if parsed.path == "/defaults":
                 self._send_json(_default_display_paths(str(payload.get("input_dir") or "")))
                 return
+            if parsed.path == "/open-url":
+                self._open_url(payload)
+                return
             self._send_json({"error": "Not found"}, HTTPStatus.NOT_FOUND)
 
         def _deps(self) -> None:
             try:
                 logger = _gui_logger(state)
                 tools = resolve_tools(logger, True, default_tools_dir())
-                encoders = detect_ffmpeg_encoders(tools, timeout=3)
+                encoders = _detect_gui_ffmpeg_encoders(tools)
                 gpu_encoders = sorted(
                     encoder
                     for encoder in encoders
@@ -1135,6 +1171,14 @@ def _make_handler(state: GuiState):
                 )
             except Exception as exc:
                 self._send_json({"ok": False, "message": str(exc)}, HTTPStatus.INTERNAL_SERVER_ERROR)
+
+        def _open_url(self, payload: dict[str, object]) -> None:
+            url = str(payload.get("url") or "")
+            if url != REPOSITORY_URL:
+                self._send_json({"error": "Unsupported URL"}, HTTPStatus.BAD_REQUEST)
+                return
+            webbrowser.open(url)
+            self._send_json({"ok": True})
 
         def _scan(self, payload: dict[str, object]) -> None:
             try:
@@ -1182,6 +1226,7 @@ def _make_handler(state: GuiState):
             return json.loads(raw.decode("utf-8"))
 
         def _send_html(self, content: str) -> None:
+            content = content.replace("__APP_VERSION__", __version__).replace("__REPOSITORY_URL__", REPOSITORY_URL)
             data = content.encode("utf-8")
             self.send_response(HTTPStatus.OK)
             self.send_header("Content-Type", "text/html; charset=utf-8")
@@ -1236,6 +1281,19 @@ def _recommended_gpu_mode(gpu_encoders: list[str]) -> str:
             if encoder in available:
                 return "auto"
     return "off"
+
+
+def _detect_gui_ffmpeg_encoders(tools) -> set[str]:
+    attempts = (5, 10, 15) if platform.system() == "Darwin" else (5,)
+    encoders: set[str] = set()
+    for timeout in attempts:
+        encoders = detect_ffmpeg_encoders(tools, timeout=timeout)
+        if platform.system() != "Darwin" and encoders:
+            return encoders
+        if any(encoder.endswith("_videotoolbox") for encoder in encoders):
+            return encoders
+        time.sleep(0.35)
+    return encoders
 
 
 def _build_merge_command(payload: dict[str, object]) -> list[str]:
