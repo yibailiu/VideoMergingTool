@@ -25,12 +25,22 @@ class GuiFolderPickerTests(unittest.TestCase):
     def test_windows_falls_back_to_tk_folder_picker(self) -> None:
         with patch("videomerge.gui.platform.system", return_value="Windows"), patch(
             "videomerge.gui._pick_folder_windows",
-            return_value="",
+            return_value=None,
         ), patch("videomerge.gui._pick_folder_tk", return_value="C:/Videos") as pick_tk:
             selected = _pick_folder("source")
 
         self.assertEqual(selected, "C:/Videos")
         pick_tk.assert_called_once_with("Select source video folder")
+
+    def test_windows_cancel_does_not_open_fallback_picker(self) -> None:
+        with patch("videomerge.gui.platform.system", return_value="Windows"), patch(
+            "videomerge.gui._pick_folder_windows",
+            return_value="",
+        ), patch("videomerge.gui._pick_folder_tk") as pick_tk:
+            selected = _pick_folder("source")
+
+        self.assertEqual(selected, "")
+        pick_tk.assert_not_called()
 
     def test_macos_uses_osascript_folder_picker(self) -> None:
         with patch("videomerge.gui.platform.system", return_value="Darwin"), patch(
@@ -70,7 +80,17 @@ class GuiFolderPickerTests(unittest.TestCase):
         self.assertNotIn("name", loaded)
         self.assertNotIn("inputDir", loaded)
 
-    def test_windows_picker_does_not_hide_files_with_folder_filter(self) -> None:
+    def test_temp_folder_uses_temp_dialog_title(self) -> None:
+        with patch("videomerge.gui.platform.system", return_value="Windows"), patch(
+            "videomerge.gui._pick_folder_windows",
+            return_value="C:/Temp",
+        ) as pick_windows:
+            selected = _pick_folder("temp")
+
+        self.assertEqual(selected, "C:/Temp")
+        pick_windows.assert_called_once_with("Select temp folder")
+
+    def test_windows_picker_uses_custom_browser_with_current_folder_button(self) -> None:
         commands = []
 
         def fake_run(args, **kwargs):  # type: ignore[no-untyped-def]
@@ -84,9 +104,11 @@ class GuiFolderPickerTests(unittest.TestCase):
             selected = _pick_folder("source")
 
         self.assertEqual(selected, "C:/Videos")
-        self.assertIn("All files (*.*)|*.*", commands[0])
+        self.assertIn("System.Windows.Forms.ListView", commands[0])
+        self.assertIn("Select This Folder", commands[0])
+        self.assertIn("Get-ChildItem", commands[0])
         self.assertIn("OutputEncoding", commands[0])
-        self.assertNotIn("*.folder", commands[0])
+        self.assertNotIn("OpenFileDialog", commands[0])
 
     def test_normalize_picked_folder_strips_placeholder_name(self) -> None:
         self.assertEqual(
