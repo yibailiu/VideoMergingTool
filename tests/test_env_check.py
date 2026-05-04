@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import logging
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from videomerge.env_check import _find_binary
+from videomerge.env_check import _find_binary, _sha256, _verify_download_checksum
+from videomerge.errors import DependencyError
 
 
 class EnvCheckTests(unittest.TestCase):
@@ -39,6 +41,23 @@ class EnvCheckTests(unittest.TestCase):
                 found = _find_binary("ffmpeg", Path(temp_dir) / "missing-tools")
 
         self.assertEqual(found, bundled)
+
+    def test_verify_download_checksum_accepts_matching_env(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            archive = Path(temp_dir) / "ffmpeg.zip"
+            archive.write_bytes(b"archive")
+            with patch.dict("videomerge.env_check.os.environ", {"TEST_SHA256": _sha256(archive)}):
+                _verify_download_checksum(archive, "TEST_SHA256", logging.getLogger("test"))
+            self.assertTrue(archive.exists())
+
+    def test_verify_download_checksum_rejects_mismatch_and_removes_file(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            archive = Path(temp_dir) / "ffmpeg.zip"
+            archive.write_bytes(b"archive")
+            with patch.dict("videomerge.env_check.os.environ", {"TEST_SHA256": "0" * 64}):
+                with self.assertRaises(DependencyError):
+                    _verify_download_checksum(archive, "TEST_SHA256", logging.getLogger("test"))
+            self.assertFalse(archive.exists())
 
 
 if __name__ == "__main__":

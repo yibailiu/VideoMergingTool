@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 import platform
@@ -19,17 +20,21 @@ from .models import ToolPaths
 DOWNLOADS = {
     "Darwin": {
         "url": "https://evermeet.cx/ffmpeg/getrelease/zip",
+        "checksum_env": "VIDEOMERGE_FFMPEG_DARWIN_SHA256",
         "ffmpeg_member": "ffmpeg",
         "ffprobe_url": "https://evermeet.cx/ffmpeg/getrelease/ffprobe/zip",
+        "ffprobe_checksum_env": "VIDEOMERGE_FFPROBE_DARWIN_SHA256",
         "ffprobe_member": "ffprobe",
     },
     "Windows": {
         "url": "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip",
+        "checksum_env": "VIDEOMERGE_FFMPEG_WINDOWS_SHA256",
         "ffmpeg_member": "ffmpeg.exe",
         "ffprobe_member": "ffprobe.exe",
     },
     "Linux": {
         "url": "https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz",
+        "checksum_env": "VIDEOMERGE_FFMPEG_LINUX_SHA256",
         "ffmpeg_member": "ffmpeg",
         "ffprobe_member": "ffprobe",
     },
@@ -91,12 +96,12 @@ def download_ffmpeg_tools(tools_dir: Path, logger: logging.Logger) -> ToolPaths:
 
     tools_dir.mkdir(parents=True, exist_ok=True)
     archive_path = tools_dir / f"ffmpeg_download{_archive_suffix(config['url'])}"
-    _download(config["url"], archive_path, logger)
+    _download(config["url"], archive_path, logger, config.get("checksum_env"))
     ffmpeg = _extract_member(archive_path, config["ffmpeg_member"], tools_dir, logger)
 
     if system == "Darwin" and "ffprobe_url" in config:
         ffprobe_archive = tools_dir / f"ffprobe_download{_archive_suffix(config['ffprobe_url'])}"
-        _download(config["ffprobe_url"], ffprobe_archive, logger)
+        _download(config["ffprobe_url"], ffprobe_archive, logger, config.get("ffprobe_checksum_env"))
         ffprobe = _extract_member(ffprobe_archive, config["ffprobe_member"], tools_dir, logger)
     else:
         ffprobe = _extract_member(archive_path, config["ffprobe_member"], tools_dir, logger)
@@ -167,13 +172,39 @@ def _system_binary_candidates(name: str) -> list[Path]:
     ]
 
 
-def _download(url: str, output: Path, logger: logging.Logger) -> None:
+def _download(url: str, output: Path, logger: logging.Logger, checksum_env: str | None = None) -> None:
     logger.info("Downloading %s", url)
     try:
         with urllib.request.urlopen(url, context=_ssl_context(), timeout=60) as response, output.open("wb") as file:
             shutil.copyfileobj(response, file)
     except Exception as exc:  # pragma: no cover - depends on network.
         raise DependencyError(f"Failed to download {url}: {exc}") from exc
+    _verify_download_checksum(output, checksum_env, logger)
+
+
+def _verify_download_checksum(path: Path, checksum_env: str | None, logger: logging.Logger) -> None:
+    digest = _sha256(path)
+    logger.info("Downloaded %s SHA256: %s", path.name, digest)
+    if not checksum_env:
+        return
+    expected = os.environ.get(checksum_env, "").strip().lower()
+    if not expected:
+        logger.info("Set %s to enforce this download checksum.", checksum_env)
+        return
+    if digest.lower() != expected:
+        path.unlink(missing_ok=True)
+        raise DependencyError(
+            f"Checksum mismatch for {path.name}: expected {expected}, got {digest}. "
+            f"Update {checksum_env} only after verifying the upstream archive."
+        )
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as file:
+        for chunk in iter(lambda: file.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def _ssl_context() -> ssl.SSLContext:

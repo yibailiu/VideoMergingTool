@@ -23,6 +23,9 @@ VideoMergingTool helps you combine many video clips into longer videos without u
 The packaged Windows and macOS apps include FFmpeg and FFprobe, so normal users do not need to install FFmpeg manually.
 
 ## What It Does
+<p align="center">
+  <img src="assets/screenshots/screenshot_en.png" width="960" alt="VideoMergingTool 图标">
+</p>
 
 - Finds common video files in a folder, including `mp4`, `mkv`, `mov`, `avi`, `ts`, `m4v`, `flv`, and `webm`
 - Shows useful details such as duration, resolution, codec, FPS, and status
@@ -117,10 +120,6 @@ When running from source, the tool may download FFmpeg if no local FFmpeg is ava
 
 Unsigned builds may trigger Windows SmartScreen or macOS Gatekeeper warnings. These warnings are about publisher signing status, not about the app uploading files.
 
-Fully removing those warnings requires official code signing:
-
-- Windows: Authenticode signing with a trusted certificate
-- macOS: Apple Developer ID signing and notarization
 
 ## Tips
 
