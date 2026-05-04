@@ -8,3 +8,13 @@ merged/
 dist/
 build/
 *.spec
+.env
+.env.*
+*.pem
+*.key
+*.p12
+*.pfx
+*.cer
+*.crt
+*.mobileprovision
+*.provisionprofile

@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
 
-from videomerge.gui import GuiState, _cleanup_cancel_temp_dirs
+from videomerge.gui import HTML, GuiState, _cleanup_cancel_temp_dirs
 
 
 class GuiCancelTests(unittest.TestCase):
@@ -55,6 +55,10 @@ class GuiCancelTests(unittest.TestCase):
             _cleanup_cancel_temp_dirs(state)
 
         rmtree.assert_not_called()
+
+    def test_frontend_sends_api_token_header(self) -> None:
+        self.assertIn("X-VideoMergingTool-Token", HTML)
+        self.assertIn("__API_TOKEN__", HTML)
 
 
 if __name__ == "__main__":

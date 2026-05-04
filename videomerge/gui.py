@@ -5,6 +5,7 @@ import logging
 import os
 import platform
 import re
+import secrets
 import shutil
 import signal
 import socket
@@ -683,9 +684,11 @@ HTML = r"""<!doctype html>
       button.classList.toggle("stop", running);
     }
     async function api(path, body) {
+      const headers = {"X-VideoMergingTool-Token": "__API_TOKEN__"};
+      if (body) headers["Content-Type"] = "application/json";
       const response = await fetch(path, {
         method: body ? "POST" : "GET",
-        headers: body ? {"Content-Type": "application/json"} : undefined,
+        headers,
         body: body ? JSON.stringify(body) : undefined
       });
       const payload = await response.json();
@@ -1069,7 +1072,8 @@ class QueueLogHandler(logging.Handler):
 def launch_gui(host: str = "127.0.0.1", port: int | None = None) -> None:
     port = port or _free_port()
     state = GuiState()
-    server = ThreadingHTTPServer((host, port), _make_handler(state))
+    api_token = secrets.token_urlsafe(32)
+    server = ThreadingHTTPServer((host, port), _make_handler(state, api_token))
     url = f"http://{host}:{port}"
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -1095,7 +1099,7 @@ def _open_desktop_window(url: str) -> None:
     webview.start()
 
 
-def _make_handler(state: GuiState):
+def _make_handler(state: GuiState, api_token: str):
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, _format: str, *args: object) -> None:
             return
@@ -1104,6 +1108,8 @@ def _make_handler(state: GuiState):
             parsed = urlparse(self.path)
             if parsed.path == "/":
                 self._send_html(HTML)
+                return
+            if not self._authorized():
                 return
             if parsed.path == "/pick-folder":
                 kind = parse_qs(parsed.query).get("kind", ["source"])[0]
@@ -1125,6 +1131,8 @@ def _make_handler(state: GuiState):
 
         def do_POST(self) -> None:
             parsed = urlparse(self.path)
+            if not self._authorized():
+                return
             payload = self._read_json()
             if parsed.path == "/scan":
                 self._scan(payload)
@@ -1225,8 +1233,18 @@ def _make_handler(state: GuiState):
             raw = self.rfile.read(length)
             return json.loads(raw.decode("utf-8"))
 
+        def _authorized(self) -> bool:
+            if self.headers.get("X-VideoMergingTool-Token") == api_token:
+                return True
+            self._send_json({"error": "Unauthorized"}, HTTPStatus.FORBIDDEN)
+            return False
+
         def _send_html(self, content: str) -> None:
-            content = content.replace("__APP_VERSION__", __version__).replace("__REPOSITORY_URL__", REPOSITORY_URL)
+            content = (
+                content.replace("__APP_VERSION__", __version__)
+                .replace("__REPOSITORY_URL__", REPOSITORY_URL)
+                .replace("__API_TOKEN__", api_token)
+            )
             data = content.encode("utf-8")
             self.send_response(HTTPStatus.OK)
             self.send_header("Content-Type", "text/html; charset=utf-8")

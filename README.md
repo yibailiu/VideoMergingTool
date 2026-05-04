@@ -23,6 +23,9 @@ VideoMergingTool 用来把一个文件夹里的多个视频批量合并成更长
 Windows 和 macOS 安装包已经内置 FFmpeg / FFprobe，普通用户不需要手动安装 FFmpeg，也不需要配置环境变量。
 
 ## 它能做什么
+<p align="center">
+  <img src="assets/screenshots/screenshot_zhCN.png" width="960" alt="VideoMergingTool 图标">
+</p>
 
 - 扫描文件夹中的常见视频格式，包括 `mp4`、`mkv`、`mov`、`avi`、`ts`、`m4v`、`flv`、`webm`
 - 显示视频时长、分辨率、编码、帧率和处理状态
@@ -117,10 +120,6 @@ VideoMergingTool 在你的电脑本地处理视频，不会把视频文件上传
 
 未签名版本可能会触发 Windows SmartScreen 或 macOS Gatekeeper 提示。这类提示主要和发布者签名状态有关，并不代表应用会上传你的文件。
 
-如果要彻底消除这些提示，需要正式代码签名：
-
-- Windows：使用受信任证书进行 Authenticode 签名
-- macOS：使用 Apple Developer ID 签名并完成 notarization
 
 ## 使用建议
 

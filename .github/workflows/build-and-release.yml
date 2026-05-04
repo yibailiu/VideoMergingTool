@@ -10,7 +10,13 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
+
+env:
+  VIDEOMERGE_FFMPEG_DARWIN_SHA256: ${{ vars.VIDEOMERGE_FFMPEG_DARWIN_SHA256 }}
+  VIDEOMERGE_FFPROBE_DARWIN_SHA256: ${{ vars.VIDEOMERGE_FFPROBE_DARWIN_SHA256 }}
+  VIDEOMERGE_FFMPEG_WINDOWS_SHA256: ${{ vars.VIDEOMERGE_FFMPEG_WINDOWS_SHA256 }}
+  VIDEOMERGE_FFMPEG_LINUX_SHA256: ${{ vars.VIDEOMERGE_FFMPEG_LINUX_SHA256 }}
 
 jobs:
   build:
@@ -78,9 +84,23 @@ jobs:
           path: ${{ matrix.package_path }}
           if-no-files-found: error
 
-      - name: Upload release asset
-        if: startsWith(github.ref, 'refs/tags/v')
+  release:
+    name: Publish GitHub Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: write
+
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+
+      - name: Upload release assets
         uses: softprops/action-gh-release@v2
         with:
-          files: ${{ matrix.package_path }}
+          files: release-assets/**/*
           generate_release_notes: true
