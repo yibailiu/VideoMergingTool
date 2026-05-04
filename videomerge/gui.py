@@ -1482,138 +1482,30 @@ def _pick_folder_windows(title: str) -> str | None:
     escaped_title = title.replace("'", "''")
     script = r"""
 Add-Type -AssemblyName System.Windows.Forms
-Add-Type -AssemblyName System.Drawing
 [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new()
 
-$form = New-Object System.Windows.Forms.Form
-$form.Text = '__TITLE__'
-$form.StartPosition = 'CenterScreen'
-$form.Width = 820
-$form.Height = 560
-$form.MinimizeBox = $false
-$form.MaximizeBox = $true
-
-$pathBox = New-Object System.Windows.Forms.TextBox
-$pathBox.Left = 12
-$pathBox.Top = 12
-$pathBox.Width = 680
-$pathBox.ReadOnly = $true
-$pathBox.Anchor = 'Top,Left,Right'
-$form.Controls.Add($pathBox)
-
-$upButton = New-Object System.Windows.Forms.Button
-$upButton.Left = 704
-$upButton.Top = 10
-$upButton.Width = 90
-$upButton.Text = 'Up'
-$upButton.Anchor = 'Top,Right'
-$form.Controls.Add($upButton)
-
-$list = New-Object System.Windows.Forms.ListView
-$list.Left = 12
-$list.Top = 44
-$list.Width = 782
-$list.Height = 425
-$list.View = 'Details'
-$list.FullRowSelect = $true
-$list.HideSelection = $false
-$list.Anchor = 'Top,Bottom,Left,Right'
-[void]$list.Columns.Add('Name', 410)
-[void]$list.Columns.Add('Type', 120)
-[void]$list.Columns.Add('Size', 100)
-[void]$list.Columns.Add('Modified', 130)
-$form.Controls.Add($list)
-
-$selectButton = New-Object System.Windows.Forms.Button
-$selectButton.Left = 540
-$selectButton.Top = 485
-$selectButton.Width = 150
-$selectButton.Height = 30
-$selectButton.Text = 'Select This Folder'
-$selectButton.Anchor = 'Bottom,Right'
-$form.Controls.Add($selectButton)
-
-$cancelButton = New-Object System.Windows.Forms.Button
-$cancelButton.Left = 704
-$cancelButton.Top = 485
-$cancelButton.Width = 90
-$cancelButton.Height = 30
-$cancelButton.Text = 'Cancel'
-$cancelButton.Anchor = 'Bottom,Right'
-$form.CancelButton = $cancelButton
-$form.Controls.Add($cancelButton)
-
-$script:CurrentDir = [Environment]::GetFolderPath('MyVideos')
-if (-not $script:CurrentDir -or -not (Test-Path -LiteralPath $script:CurrentDir -PathType Container)) {
-  $script:CurrentDir = [Environment]::GetFolderPath('UserProfile')
+$dialog = New-Object System.Windows.Forms.OpenFileDialog
+$dialog.Title = '__TITLE__'
+$dialog.CheckFileExists = $false
+$dialog.ValidateNames = $false
+$dialog.DereferenceLinks = $true
+$dialog.AutoUpgradeEnabled = $true
+$dialog.Filter = 'All files (*.*)|*.*'
+$dialog.FileName = 'Select this folder'
+$initial = [Environment]::GetFolderPath('MyVideos')
+if (-not $initial -or -not (Test-Path -LiteralPath $initial -PathType Container)) {
+  $initial = [Environment]::GetFolderPath('UserProfile')
 }
-
-function Format-Size([long]$Length) {
-  if ($Length -ge 1073741824) { return ('{0:N1} GB' -f ($Length / 1073741824)) }
-  if ($Length -ge 1048576) { return ('{0:N1} MB' -f ($Length / 1048576)) }
-  if ($Length -ge 1024) { return ('{0:N1} KB' -f ($Length / 1024)) }
-  return ('{0} B' -f $Length)
+if ($initial -and (Test-Path -LiteralPath $initial -PathType Container)) {
+  $dialog.InitialDirectory = $initial
 }
-
-function Set-Directory([string]$Path) {
-  if (-not (Test-Path -LiteralPath $Path -PathType Container)) { return }
-  $script:CurrentDir = [System.IO.Path]::GetFullPath($Path)
-  $pathBox.Text = $script:CurrentDir
-  $list.Items.Clear()
-
-  $parent = [System.IO.Directory]::GetParent($script:CurrentDir)
-  if ($parent) {
-    $item = New-Object System.Windows.Forms.ListViewItem('..')
-    [void]$item.SubItems.Add('Parent folder')
-    [void]$item.SubItems.Add('')
-    [void]$item.SubItems.Add('')
-    $item.Tag = $parent.FullName
-    [void]$list.Items.Add($item)
+if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
+  $selected = $dialog.FileName
+  if (Test-Path -LiteralPath $selected -PathType Container) {
+    Write-Output $selected
+  } else {
+    Write-Output (Split-Path -Parent $selected)
   }
-
-  try {
-    $entries = Get-ChildItem -LiteralPath $script:CurrentDir -Force -ErrorAction Stop | Sort-Object @{ Expression = { -not $_.PSIsContainer } }, Name
-    foreach ($entry in $entries) {
-      $item = New-Object System.Windows.Forms.ListViewItem($entry.Name)
-      [void]$item.SubItems.Add($(if ($entry.PSIsContainer) { 'Folder' } else { 'File' }))
-      [void]$item.SubItems.Add($(if ($entry.PSIsContainer) { '' } else { Format-Size $entry.Length }))
-      [void]$item.SubItems.Add($entry.LastWriteTime.ToString('yyyy-MM-dd HH:mm'))
-      $item.Tag = $entry.FullName
-      if ($entry.PSIsContainer) { $item.Font = New-Object System.Drawing.Font -ArgumentList $item.Font, ([System.Drawing.FontStyle]::Bold) }
-      [void]$list.Items.Add($item)
-    }
-  } catch {
-    [System.Windows.Forms.MessageBox]::Show($_.Exception.Message, 'Unable to open folder', 'OK', 'Warning') | Out-Null
-  }
-}
-
-$upButton.Add_Click({
-  $parent = [System.IO.Directory]::GetParent($script:CurrentDir)
-  if ($parent) { Set-Directory $parent.FullName }
-})
-
-$list.Add_DoubleClick({
-  if ($list.SelectedItems.Count -eq 0) { return }
-  $target = [string]$list.SelectedItems[0].Tag
-  if (Test-Path -LiteralPath $target -PathType Container) { Set-Directory $target }
-})
-
-$selectButton.Add_Click({
-  $form.Tag = $script:CurrentDir
-  $form.DialogResult = [System.Windows.Forms.DialogResult]::OK
-  $form.Close()
-})
-
-$cancelButton.Add_Click({
-  $form.Tag = ''
-  $form.DialogResult = [System.Windows.Forms.DialogResult]::Cancel
-  $form.Close()
-})
-
-$form.Add_Shown({ Set-Directory $script:CurrentDir })
-$result = $form.ShowDialog()
-if ($result -eq [System.Windows.Forms.DialogResult]::OK -and $form.Tag) {
-  Write-Output ([string]$form.Tag)
 }
 """.replace("__TITLE__", escaped_title)
     try:

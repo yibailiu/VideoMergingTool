@@ -90,12 +90,12 @@ class GuiFolderPickerTests(unittest.TestCase):
         self.assertEqual(selected, "C:/Temp")
         pick_windows.assert_called_once_with("Select temp folder")
 
-    def test_windows_picker_uses_custom_browser_with_current_folder_button(self) -> None:
+    def test_windows_picker_uses_native_file_explorer_dialog(self) -> None:
         commands = []
 
         def fake_run(args, **kwargs):  # type: ignore[no-untyped-def]
             commands.append(args[-1])
-            return type("Result", (), {"returncode": 0, "stdout": "C:/Videos\n"})()
+            return type("Result", (), {"returncode": 0, "stdout": "C:/Videos/Select this folder\n"})()
 
         with patch("videomerge.gui.platform.system", return_value="Windows"), patch(
             "videomerge.gui.subprocess.run",
@@ -104,11 +104,26 @@ class GuiFolderPickerTests(unittest.TestCase):
             selected = _pick_folder("source")
 
         self.assertEqual(selected, "C:/Videos")
-        self.assertIn("System.Windows.Forms.ListView", commands[0])
-        self.assertIn("Select This Folder", commands[0])
-        self.assertIn("Get-ChildItem", commands[0])
+        self.assertIn("System.Windows.Forms.OpenFileDialog", commands[0])
+        self.assertIn("CheckFileExists = $false", commands[0])
+        self.assertIn("ValidateNames = $false", commands[0])
+        self.assertIn("FileName = 'Select this folder'", commands[0])
+        self.assertIn("All files (*.*)|*.*", commands[0])
         self.assertIn("OutputEncoding", commands[0])
-        self.assertNotIn("OpenFileDialog", commands[0])
+        self.assertNotIn("System.Windows.Forms.ListView", commands[0])
+
+    def test_windows_picker_cancel_returns_empty_without_fallback(self) -> None:
+        def fake_run(args, **kwargs):  # type: ignore[no-untyped-def]
+            return type("Result", (), {"returncode": 0, "stdout": ""})()
+
+        with patch("videomerge.gui.platform.system", return_value="Windows"), patch(
+            "videomerge.gui.subprocess.run",
+            side_effect=fake_run,
+        ), patch("videomerge.gui._pick_folder_tk") as pick_tk:
+            selected = _pick_folder("source")
+
+        self.assertEqual(selected, "")
+        pick_tk.assert_not_called()
 
     def test_normalize_picked_folder_strips_placeholder_name(self) -> None:
         self.assertEqual(
