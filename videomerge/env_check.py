@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import logging
+import os
 import platform
 import shutil
+import ssl
 import stat
+import sys
 import tarfile
 import urllib.request
 import zipfile
@@ -31,6 +34,21 @@ DOWNLOADS = {
         "ffprobe_member": "ffprobe",
     },
 }
+
+
+def default_tools_dir() -> Path:
+    if not getattr(sys, "frozen", False):
+        return Path.cwd() / ".tools" / "ffmpeg"
+
+    system = platform.system()
+    if system == "Darwin":
+        base = Path.home() / "Library" / "Application Support" / "VideoMergingTool"
+    elif system == "Windows":
+        base = Path(os.environ.get("LOCALAPPDATA") or os.environ.get("APPDATA") or Path.home() / "AppData" / "Local")
+        base = base / "VideoMergingTool"
+    else:
+        base = Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local" / "share") / "VideoMergingTool"
+    return base / ".tools" / "ffmpeg"
 
 
 def resolve_tools(
@@ -92,19 +110,79 @@ def download_ffmpeg_tools(tools_dir: Path, logger: logging.Logger) -> ToolPaths:
 
 def _find_binary(name: str, tools_dir: Path) -> Path | None:
     local_name = f"{name}.exe" if platform.system() == "Windows" else name
+    bundled = _bundled_binary(local_name)
+    if bundled:
+        return bundled
     local = tools_dir / local_name
     if local.exists():
         return local
     found = shutil.which(name)
-    return Path(found) if found else None
+    if found:
+        return Path(found)
+    for candidate in _system_binary_candidates(name):
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def _bundled_binary(local_name: str) -> Path | None:
+    if not getattr(sys, "frozen", False):
+        return None
+    base = Path(getattr(sys, "_MEIPASS", Path(sys.executable).parent))
+    for candidate in (
+        base / "ffmpeg" / local_name,
+        base / local_name,
+        Path(sys.executable).resolve().parent / "ffmpeg" / local_name,
+    ):
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def _system_binary_candidates(name: str) -> list[Path]:
+    if platform.system() == "Darwin":
+        return [
+            Path("/opt/homebrew/bin") / name,
+            Path("/usr/local/bin") / name,
+            Path("/opt/local/bin") / name,
+            Path("/usr/bin") / name,
+        ]
+    if platform.system() == "Windows":
+        local_name = f"{name}.exe"
+        candidates: list[Path] = []
+        for root in (os.environ.get("ProgramFiles"), os.environ.get("ProgramFiles(x86)")):
+            if root:
+                candidates.extend(
+                    [
+                        Path(root) / "ffmpeg" / "bin" / local_name,
+                        Path(root) / "FFmpeg" / "bin" / local_name,
+                    ]
+                )
+        return candidates
+    return [
+        Path("/usr/local/bin") / name,
+        Path("/usr/bin") / name,
+        Path("/bin") / name,
+        Path("/snap/bin") / name,
+    ]
 
 
 def _download(url: str, output: Path, logger: logging.Logger) -> None:
     logger.info("Downloading %s", url)
     try:
-        urllib.request.urlretrieve(url, output)
+        with urllib.request.urlopen(url, context=_ssl_context(), timeout=60) as response, output.open("wb") as file:
+            shutil.copyfileobj(response, file)
     except Exception as exc:  # pragma: no cover - depends on network.
         raise DependencyError(f"Failed to download {url}: {exc}") from exc
+
+
+def _ssl_context() -> ssl.SSLContext:
+    try:
+        import certifi
+
+        return ssl.create_default_context(cafile=certifi.where())
+    except Exception:
+        return ssl.create_default_context()
 
 
 def _archive_suffix(url: str) -> str:

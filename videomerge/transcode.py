@@ -3,8 +3,10 @@ from __future__ import annotations
 import logging
 import tempfile
 from pathlib import Path
+from typing import Callable
 
 from .errors import CommandError, ProbeError
+from .gpu import GpuPlan, gpu_encoder_quality_args
 from .models import Canvas, CodecPlan, ToolPaths, VideoFile
 from .probe import probe_file
 from .utils import run_command
@@ -22,9 +24,16 @@ def preprocess_group(
     preset: str,
     keep_temp: bool,
     dry_run: bool,
+    gpu_plan: GpuPlan | None = None,
+    temp_root: Path | None = None,
+    progress_callback: Callable[[VideoFile], None] | None = None,
 ) -> tuple[list[Path], tempfile.TemporaryDirectory[str] | None]:
-    temp_owner = None if keep_temp else tempfile.TemporaryDirectory(prefix="videomerge_preprocess_")
-    temp_dir = Path(temp_owner.name) if temp_owner else Path(tempfile.mkdtemp(prefix="videomerge_preprocess_"))
+    temp_owner = (
+        None
+        if keep_temp
+        else tempfile.TemporaryDirectory(prefix="videomerge_preprocess_", dir=temp_root)
+    )
+    temp_dir = Path(temp_owner.name) if temp_owner else Path(tempfile.mkdtemp(prefix="videomerge_preprocess_", dir=temp_root))
     logger.info("Preprocessing temp directory: %s", temp_dir)
 
     outputs: list[Path] = []
@@ -42,8 +51,11 @@ def preprocess_group(
             crf=crf,
             preset=preset,
             dry_run=dry_run,
+            gpu_plan=gpu_plan,
         )
         outputs.append(output_path)
+        if progress_callback:
+            progress_callback(file)
 
     if keep_temp:
         logger.info("Keeping temp files in %s", temp_dir)
@@ -63,6 +75,7 @@ def preprocess_file(
     crf: int,
     preset: str,
     dry_run: bool,
+    gpu_plan: GpuPlan | None = None,
 ) -> None:
     video_filter = build_video_filter(file.rotation, canvas, fps, pad_color)
     args: list[str | Path] = [
@@ -113,10 +126,14 @@ def preprocess_file(
             "rotate=0",
             "-c:v",
             codec_plan.output_video_encoder,
-            "-crf",
-            str(crf),
-            "-preset",
-            preset,
+            *gpu_encoder_quality_args(
+                codec_plan.output_video_encoder if gpu_plan and gpu_plan.enabled else None,
+                crf,
+                preset,
+                canvas.width,
+                canvas.height,
+                fps,
+            ),
             "-pix_fmt",
             "yuv420p",
             "-c:a",

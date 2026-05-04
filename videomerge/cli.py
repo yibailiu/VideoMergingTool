@@ -7,15 +7,16 @@ from typing import Optional
 
 import typer
 
-from .env_check import resolve_tools
+from .env_check import default_tools_dir, resolve_tools
 from .errors import CommandError, DependencyError, VideoMergeError
 from .grouping import choose_canvas, choose_fps, group_fast, majority_codec_plan, split_by_orientation
+from .gpu import GpuMode, apply_gpu_encoder, resolve_gpu_plan
 from .logger import setup_logging
 from .merge import concat_copy, warn_container_compatibility
 from .models import CodecPlan, MergeMode, MergeResult, Orientation, VideoFile
 from .naming import SUPPORTED_OUTPUT_FORMATS, auto_name, prepare_output_dir, unique_output_path
 from .probe import probe_files
-from .scanner import scan_video_files
+from .scanner import SORT_OPTIONS, scan_video_files
 from .transcode import preprocess_group
 
 app = typer.Typer(help="Local batch video merging tool powered by FFmpeg.", no_args_is_help=True)
@@ -46,8 +47,10 @@ def merge(
     output_format: str = typer.Option("mp4", "--output-format", help="mp4, mkv, mov, avi, ts, webm."),
     name: Optional[str] = typer.Option(None, "--name", help="Custom output filename without extension."),
     recursive: bool = typer.Option(True, "--recursive/--no-recursive", help="Scan subdirectories."),
+    sort_by: str = typer.Option("name-natural-asc", "--sort-by", help="Merge order: name-natural-asc, name-natural-desc, name-asc, name-desc, modified-asc, modified-desc, size-asc, size-desc."),
     overwrite: bool = typer.Option(False, "--overwrite", help="Overwrite existing output files."),
     keep_temp: bool = typer.Option(False, "--keep-temp", help="Keep temporary preprocessed files."),
+    temp_dir: Optional[Path] = typer.Option(None, "--temp-dir", help="Directory used for temporary preprocessing and concat files."),
     log_file: Optional[Path] = typer.Option(None, "--log-file", help="Write detailed logs to this file."),
     dry_run: bool = typer.Option(False, "--dry-run", help="Print actions without running FFmpeg."),
     pad_color: str = typer.Option("black", "--pad-color", help="Padding color used for transcode modes."),
@@ -57,6 +60,7 @@ def merge(
     audio_codec: Optional[str] = typer.Option(None, "--audio-codec", help="Override target audio codec."),
     crf: int = typer.Option(20, "--crf", min=0, max=51, help="Video CRF for transcode modes."),
     preset: str = typer.Option("medium", "--preset", help="FFmpeg encoder preset."),
+    gpu: GpuMode = typer.Option(GpuMode.off, "--gpu", help="GPU acceleration: off, auto, nvenc, qsv, amf, videotoolbox."),
     ffmpeg_path: Optional[Path] = typer.Option(None, "--ffmpeg-path", help="Explicit ffmpeg path."),
     ffprobe_path: Optional[Path] = typer.Option(None, "--ffprobe-path", help="Explicit ffprobe path."),
     auto_download_deps: bool = typer.Option(
@@ -71,18 +75,20 @@ def merge(
     logger = setup_logging(log_file=log_file, verbose=verbose)
 
     try:
-        _validate_cli(input_dir, output_format, fps_policy, resolution_policy)
+        _validate_cli(input_dir, output_format, fps_policy, resolution_policy, sort_by, temp_dir)
         out_dir = prepare_output_dir(input_dir, output_dir)
+        if temp_dir:
+            temp_dir.mkdir(parents=True, exist_ok=True)
         tools = resolve_tools(
             logger=logger,
             auto_download=auto_download_deps,
-            tools_dir=Path.cwd() / ".tools" / "ffmpeg",
+            tools_dir=default_tools_dir(),
             ffmpeg_path=ffmpeg_path,
             ffprobe_path=ffprobe_path,
         )
 
-        paths = scan_video_files(input_dir, recursive=recursive)
-        logger.info("Scanned %d candidate video files from %s", len(paths), input_dir)
+        paths = scan_video_files(input_dir, recursive=recursive, sort_by=sort_by)
+        logger.info("Scanned %d candidate video files from %s using sort=%s", len(paths), input_dir, sort_by)
         if not paths:
             raise VideoMergeError("No recognized video files found.")
 
@@ -92,6 +98,8 @@ def merge(
                 logger.warning("Probe failure: %s | %s", path, reason)
         if not media_files:
             raise VideoMergeError("No readable video files found.")
+        progress = ProgressReporter(total_units=_estimate_progress_units(mode, media_files), logger=logger)
+        progress.advance(0, "analysis complete")
 
         if mode == MergeMode.fast:
             results = _run_fast(
@@ -104,6 +112,8 @@ def merge(
                 logger=logger,
                 overwrite=overwrite,
                 dry_run=dry_run,
+                temp_dir=temp_dir,
+                progress=progress,
             )
         elif mode == MergeMode.optimal:
             results = _run_optimal(
@@ -123,6 +133,9 @@ def merge(
                 audio_codec=audio_codec,
                 crf=crf,
                 preset=preset,
+                gpu=gpu,
+                temp_dir=temp_dir,
+                progress=progress,
             )
         else:
             results = _run_extreme(
@@ -142,6 +155,9 @@ def merge(
                 audio_codec=audio_codec,
                 crf=crf,
                 preset=preset,
+                gpu=gpu,
+                temp_dir=temp_dir,
+                progress=progress,
             )
 
         if not results:
@@ -163,7 +179,36 @@ def merge(
         logger.info("Total runtime: %.2fs", elapsed)
 
 
-def _validate_cli(input_dir: Path, output_format: str, fps_policy: str, resolution_policy: str) -> None:
+class ProgressReporter:
+    def __init__(self, total_units: int, logger: logging.Logger) -> None:
+        self.total_units = max(total_units, 1)
+        self.completed_units = 0
+        self.logger = logger
+
+    def advance(self, units: int, message: str) -> None:
+        self.completed_units = min(self.total_units, self.completed_units + max(units, 0))
+        percent = int(round((self.completed_units / self.total_units) * 100))
+        self.logger.info("Progress: %d/%d (%d%%) %s", self.completed_units, self.total_units, percent, message)
+
+
+def _estimate_progress_units(mode: MergeMode, media_files: list[VideoFile]) -> int:
+    if mode == MergeMode.fast:
+        return sum(len(files) for files in group_fast(media_files).values() if len(files) > 1)
+    if mode == MergeMode.optimal:
+        groups = split_by_orientation(media_files)
+        output_count = sum(1 for orientation in (Orientation.landscape, Orientation.portrait) if groups.get(orientation))
+        return len(media_files) + output_count
+    return len(media_files) + 1
+
+
+def _validate_cli(
+    input_dir: Path,
+    output_format: str,
+    fps_policy: str,
+    resolution_policy: str,
+    sort_by: str,
+    temp_dir: Path | None = None,
+) -> None:
     if not input_dir.exists():
         raise VideoMergeError(f"Input directory does not exist: {input_dir}")
     if not input_dir.is_dir():
@@ -174,6 +219,10 @@ def _validate_cli(input_dir: Path, output_format: str, fps_policy: str, resoluti
         raise VideoMergeError("Invalid --fps-policy. Use majority, max, or min.")
     if resolution_policy != "largest":
         raise VideoMergeError("Only --resolution-policy largest is currently supported.")
+    if sort_by not in SORT_OPTIONS:
+        raise VideoMergeError(f"Invalid --sort-by. Use one of: {', '.join(sorted(SORT_OPTIONS))}.")
+    if temp_dir and temp_dir.exists() and not temp_dir.is_dir():
+        raise VideoMergeError(f"Temp path is not a directory: {temp_dir}")
 
 
 def _log_merge_summary(total_video_count: int, merged_video_count: int, logger: logging.Logger) -> None:
@@ -196,6 +245,8 @@ def _run_fast(
     logger: logging.Logger,
     overwrite: bool,
     dry_run: bool,
+    temp_dir: Path | None,
+    progress: ProgressReporter,
 ) -> list[MergeResult]:
     logger.info("Mode: fast. Stream copy only; no transcoding will be performed.")
     groups = group_fast(media_files)
@@ -210,17 +261,18 @@ def _run_fast(
         if name and len(groups) > 1:
             base_name = f"{name}_{index}"
         output_path = unique_output_path(output_dir, base_name, output_format, overwrite)
-        results.append(
-            concat_copy(
-                files=[file.path for file in files],
-                output_path=output_path,
-                tools=tools,
-                logger=logger,
-                mode=MergeMode.fast,
-                overwrite=overwrite,
-                dry_run=dry_run,
-            )
+        result = concat_copy(
+            files=[file.path for file in files],
+            output_path=output_path,
+            tools=tools,
+            logger=logger,
+            mode=MergeMode.fast,
+            overwrite=overwrite,
+            dry_run=dry_run,
+            temp_root=temp_dir,
         )
+        results.append(result)
+        progress.advance(len(files), f"merged fast group {index}")
     return results
 
 
@@ -241,6 +293,9 @@ def _run_optimal(
     audio_codec: str | None,
     crf: int,
     preset: str,
+    gpu: GpuMode,
+    temp_dir: Path | None,
+    progress: ProgressReporter,
 ) -> list[MergeResult]:
     logger.info("Mode: optimal. Files will be split into landscape and portrait outputs.")
     codec_plan = _container_adjusted_plan(
@@ -248,6 +303,8 @@ def _run_optimal(
         output_format,
         logger,
     )
+    gpu_plan = resolve_gpu_plan(tools, gpu, codec_plan.video_codec, logger)
+    codec_plan = apply_gpu_encoder(codec_plan, gpu_plan)
     logger.info("Target codecs by file-count majority: video=%s audio=%s", codec_plan.video_codec, codec_plan.audio_codec)
     groups = split_by_orientation(media_files)
     results: list[MergeResult] = []
@@ -273,6 +330,9 @@ def _run_optimal(
             preset=preset,
             keep_temp=keep_temp,
             dry_run=dry_run,
+            gpu_plan=gpu_plan,
+            temp_root=temp_dir,
+            progress_callback=lambda file: progress.advance(1, f"preprocessed {file.path.name}"),
         )
         if owner:
             temp_owners.append(owner)
@@ -280,9 +340,8 @@ def _run_optimal(
         if name and len(groups) > 1:
             base_name = f"{name}_{orientation.value}"
         output_path = unique_output_path(output_dir, base_name, output_format, overwrite)
-        results.append(
-            concat_copy(preprocessed, output_path, tools, logger, MergeMode.optimal, overwrite, dry_run)
-        )
+        results.append(concat_copy(preprocessed, output_path, tools, logger, MergeMode.optimal, overwrite, dry_run, temp_dir))
+        progress.advance(1, f"merged {orientation.value} output")
 
     _cleanup_temp_owners(temp_owners, logger)
     return results
@@ -305,6 +364,9 @@ def _run_extreme(
     audio_codec: str | None,
     crf: int,
     preset: str,
+    gpu: GpuMode,
+    temp_dir: Path | None,
+    progress: ProgressReporter,
 ) -> list[MergeResult]:
     logger.info("Mode: extreme. All files will be normalized into one output.")
     codec_plan = _container_adjusted_plan(
@@ -312,6 +374,8 @@ def _run_extreme(
         output_format,
         logger,
     )
+    gpu_plan = resolve_gpu_plan(tools, gpu, codec_plan.video_codec, logger)
+    codec_plan = apply_gpu_encoder(codec_plan, gpu_plan)
     canvas = choose_canvas(media_files)
     fps = choose_fps(media_files, fps_policy)
     logger.info(
@@ -334,10 +398,14 @@ def _run_extreme(
         preset=preset,
         keep_temp=keep_temp,
         dry_run=dry_run,
+        gpu_plan=gpu_plan,
+        temp_root=temp_dir,
+        progress_callback=lambda file: progress.advance(1, f"preprocessed {file.path.name}"),
     )
     base_name = name or auto_name(input_dir.name, "extreme", canvas.label)
     output_path = unique_output_path(output_dir, base_name, output_format, overwrite)
-    result = concat_copy(preprocessed, output_path, tools, logger, MergeMode.extreme, overwrite, dry_run)
+    result = concat_copy(preprocessed, output_path, tools, logger, MergeMode.extreme, overwrite, dry_run, temp_dir)
+    progress.advance(1, "merged extreme output")
     _cleanup_temp_owners([owner] if owner else [], logger)
     return [result]
 

@@ -1,623 +1,1641 @@
 from __future__ import annotations
 
+import json
 import logging
-import queue
+import os
+import platform
+import re
+import shutil
+import signal
+import socket
 import subprocess
 import sys
+import tempfile
 import threading
 import time
-import tkinter as tk
+import webbrowser
+from http import HTTPStatus
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from tkinter import filedialog, messagebox, ttk
+from urllib.parse import parse_qs, urlparse
 
-from .env_check import resolve_tools
+from .env_check import default_tools_dir, resolve_tools
 from .grouping import group_fast, split_by_orientation
-from .models import MergeMode, Orientation, ToolPaths, VideoFile
+from .gpu import detect_ffmpeg_encoders
+from .models import MergeMode, Orientation, VideoFile
 from .probe import probe_files
 from .scanner import scan_video_files
+from .utils import subprocess_window_kwargs
+from . import __version__
 
 
-COLORS = {
-    "bg": "#161715",
-    "panel": "#1D1E1C",
-    "panel_hover": "#252724",
-    "input": "#121311",
-    "border": "#2C2D2A",
-    "border_focus": "#4A4D46",
-    "text": "#FFFFFF",
-    "secondary": "#9B9C98",
-    "muted": "#666763",
-    "red": "#E94E3D",
-    "green": "#5E9C60",
-    "yellow": "#D4A35B",
-    "blue": "#3498DB",
-    "console": "#0A0A0A",
-}
+REPOSITORY_URL = "https://github.com/yibailiu/VideoMergingTool"
+
+
+CONFIG_FIELD_IDS = [
+    "outputDir",
+    "tempDir",
+    "format",
+    "sortBy",
+    "codec",
+    "gpu",
+    "audioCodec",
+    "crf",
+    "preset",
+    "fpsPolicy",
+    "resolutionPolicy",
+    "padColor",
+    "ffmpegPath",
+    "ffprobePath",
+    "recursive",
+    "overwrite",
+    "dryRun",
+    "keepTemp",
+    "autoDownloadDeps",
+]
+
+
+HTML = r"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>VideoMergingTool</title>
+  <style>
+    :root {
+      --bg-body: #161715;
+      --bg-panel: #1D1E1C;
+      --bg-panel-hover: #252724;
+      --bg-input: #121311;
+      --border-subtle: #2C2D2A;
+      --border-focus: #4A4D46;
+      --text-primary: #FFFFFF;
+      --text-secondary: #9B9C98;
+      --text-muted: #666763;
+      --accent-red: #E94E3D;
+      --accent-green: #5E9C60;
+      --accent-yellow: #D4A35B;
+      --accent-blue: #3498DB;
+      --radius-panel: 8px;
+      --radius-input: 6px;
+      --radius-pill: 9999px;
+      --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      --font-mono: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, Courier, monospace;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    * {
+      user-select: text;
+      -webkit-user-select: text;
+    }
+    body {
+      background: var(--bg-body);
+      color: var(--text-primary);
+      font-family: var(--font-sans);
+      font-size: 14px;
+      min-height: 100vh;
+      min-width: 900px;
+      overflow: hidden;
+      -webkit-font-smoothing: antialiased;
+    }
+    button, select, input[type="checkbox"], .mode-card, .info, .version-chip {
+      user-select: none;
+      -webkit-user-select: none;
+    }
+    ::-webkit-scrollbar { width: 8px; height: 8px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: var(--border-subtle); border-radius: var(--radius-pill); }
+    header {
+      height: 56px;
+      border-bottom: 1px solid var(--border-subtle);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 24px;
+      background: var(--bg-body);
+    }
+    .brand { display: flex; align-items: center; gap: 10px; min-width: 0; }
+    .logo { font-size: 18px; font-weight: 800; letter-spacing: -.03em; display: flex; align-items: center; gap: 8px; }
+    .logo-dot { width: 6px; height: 6px; background: var(--accent-red); border-radius: 50%; }
+    .version-chip {
+      color: var(--text-secondary);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-pill);
+      padding: 3px 8px;
+      font-size: 11px;
+      font-weight: 800;
+      line-height: 1;
+    }
+    .github-button {
+      width: 30px;
+      height: 30px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      padding: 0;
+      color: var(--text-secondary);
+    }
+    .github-button svg { width: 16px; height: 16px; fill: currentColor; }
+    .dep-badge {
+      color: var(--accent-green);
+      background: var(--bg-panel);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-pill);
+      padding: 4px 12px;
+      font-size: 12px;
+      min-height: 28px;
+    }
+    button.dep-badge:hover { background: var(--bg-panel-hover); border-color: var(--border-focus); }
+    .main {
+      display: grid;
+      grid-template-columns: minmax(520px, 1fr) minmax(340px, clamp(360px, 32vw, 480px));
+      height: calc(100vh - 56px);
+      min-height: 560px;
+    }
+    .left {
+      border-right: 1px solid var(--border-subtle);
+      display: grid;
+      grid-template-rows: auto minmax(180px, 1fr) minmax(160px, 32vh) minmax(88px, auto);
+      min-width: 0;
+      overflow: hidden;
+    }
+    .right {
+      background: var(--bg-panel);
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr) auto;
+      overflow: hidden;
+    }
+    .pane-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 16px 24px 12px;
+      border-bottom: 1px solid var(--border-subtle);
+    }
+    h2 { font-size: 16px; font-weight: 700; }
+    h3, .label-micro {
+      font-size: 11px;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: .08em;
+      font-weight: 800;
+    }
+    .summary { margin-top: 8px; }
+    .toolbar { display: flex; gap: 8px; align-items: center; }
+    button {
+      font: inherit;
+      cursor: pointer;
+      border: 1px solid var(--border-subtle);
+      background: var(--bg-body);
+      color: var(--text-primary);
+      border-radius: var(--radius-pill);
+      padding: 9px 16px;
+      transition: background .16s, border-color .16s, transform .16s;
+    }
+    button:hover { background: var(--bg-panel-hover); border-color: var(--border-focus); }
+    button:active { transform: scale(.98); }
+    .btn-icon { border-radius: var(--radius-input); padding: 8px 10px; color: var(--text-secondary); }
+    .btn-primary {
+      width: 100%;
+      background: var(--text-primary);
+      color: var(--bg-body);
+      border: none;
+      border-radius: var(--radius-pill);
+      font-weight: 800;
+      padding: 14px 24px;
+    }
+    .btn-primary.stop {
+      background: var(--accent-red);
+      color: var(--text-primary);
+    }
+    .table-wrap {
+      margin: clamp(12px, 2vw, 24px);
+      margin-bottom: 12px;
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-panel);
+      overflow: auto;
+      background: var(--bg-panel);
+      min-height: 0;
+    }
+    table { width: 100%; min-width: 760px; border-collapse: collapse; table-layout: fixed; }
+    th {
+      position: sticky;
+      top: 0;
+      z-index: 1;
+      background: var(--bg-panel);
+      color: var(--text-muted);
+      text-align: left;
+      padding: 11px 16px;
+      border-bottom: 1px solid var(--border-subtle);
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: .08em;
+    }
+    td {
+      padding: 10px 16px;
+      border-bottom: 1px solid var(--border-subtle);
+      color: var(--text-secondary);
+      font-size: 13px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .mono { font-family: var(--font-mono); }
+    .group-row td {
+      background: var(--bg-body);
+      color: var(--text-secondary);
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: .06em;
+    }
+    .status-ok { color: var(--accent-green); }
+    .status-warn { color: var(--accent-yellow); }
+    .console {
+      margin: 0 clamp(12px, 2vw, 24px) 12px;
+      background: #0A0A0A;
+      border: 1px solid #1A1A1A;
+      border-radius: var(--radius-panel);
+      padding: 14px;
+      min-height: 0;
+      display: grid;
+      grid-template-rows: 18px minmax(0, 1fr) 4px;
+      gap: 8px;
+      height: 100%;
+      min-height: 150px;
+      max-height: none;
+      overflow: hidden;
+    }
+    .console-head { display: flex; justify-content: space-between; }
+    .logs {
+      overflow: auto;
+      font-family: var(--font-mono);
+      color: var(--text-muted);
+      font-size: 12px;
+      line-height: 1.5;
+      white-space: pre-wrap;
+    }
+    .bar { height: 4px; background: #222; border-radius: 2px; overflow: hidden; }
+    .bar-fill { height: 100%; width: 0%; background: var(--accent-red); transition: width .2s; }
+    .plan {
+      margin: 0 clamp(12px, 2vw, 24px) 18px;
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-panel);
+      background: var(--bg-panel);
+      padding: 14px 16px;
+      overflow: hidden;
+    }
+    .plan-title { color: var(--accent-red); margin-bottom: 8px; }
+    .plan-text { color: var(--text-secondary); font-size: 13px; }
+    .config-title { padding: 18px 24px; border-bottom: 1px solid var(--border-subtle); }
+    .config-scroll { overflow: auto; padding: 24px; min-height: 0; }
+    .mode-list { display: grid; gap: 10px; margin-top: 12px; }
+    .mode-card {
+      background: var(--bg-body);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-panel);
+      padding: 14px 16px;
+      cursor: pointer;
+    }
+    .mode-card.active { border-color: var(--accent-red); background: rgba(233,78,61,.04); }
+    .mode-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 5px; }
+    .mode-title { font-weight: 800; }
+    .badge {
+      font-size: 10px;
+      color: var(--text-secondary);
+      background: var(--bg-panel-hover);
+      border-radius: 4px;
+      padding: 2px 7px;
+      text-transform: uppercase;
+      letter-spacing: .06em;
+    }
+    .mode-card.active .badge.opt { color: var(--accent-blue); background: rgba(52,152,219,.18); }
+    .mode-card.active .badge.fast { color: var(--accent-green); background: rgba(94,156,96,.18); }
+    .mode-card.active .badge.extreme { color: var(--accent-red); background: rgba(233,78,61,.18); }
+    .mode-desc { color: var(--text-secondary); font-size: 12px; line-height: 1.4; }
+    .section { margin-top: 26px; }
+    label { display: block; margin: 12px 0 6px; }
+    input:not([type="checkbox"]), select {
+      width: 100%;
+      background: var(--bg-input);
+      color: var(--text-primary);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-input);
+      padding: 10px 12px;
+      font: inherit;
+    }
+    input[type="checkbox"] {
+      appearance: none;
+      -webkit-appearance: none;
+      width: 36px;
+      height: 20px;
+      flex: 0 0 36px;
+      border: 1px solid var(--border-focus);
+      border-radius: var(--radius-pill);
+      background: var(--bg-input);
+      position: relative;
+      cursor: pointer;
+      padding: 0;
+      margin-top: 2px;
+    }
+    input[type="checkbox"]::after {
+      content: "";
+      position: absolute;
+      width: 14px;
+      height: 14px;
+      top: 2px;
+      left: 2px;
+      border-radius: 50%;
+      background: var(--text-secondary);
+      transition: left .16s, background .16s;
+    }
+    input[type="checkbox"]:checked { background: rgba(94,156,96,.22); border-color: var(--accent-green); }
+    input[type="checkbox"]:checked::after { left: 18px; background: var(--accent-green); }
+    .folder-row { display: grid; grid-template-columns: 1fr auto; gap: 8px; }
+    .hint { color: var(--text-muted); font-size: 12px; margin-top: 6px; line-height: 1.4; }
+    .num-row { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+    .num-row input { width: 80px; text-align: right; }
+    .field-label {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin: 12px 0 6px;
+    }
+    .info {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 15px;
+      height: 15px;
+      flex: 0 0 15px;
+      border: 1px solid var(--border-focus);
+      border-radius: 50%;
+      color: var(--text-muted);
+      font-size: 10px;
+      line-height: 1;
+      cursor: help;
+      text-transform: none;
+      letter-spacing: 0;
+    }
+    .tooltip {
+      position: fixed;
+      display: none;
+      max-width: 300px;
+      z-index: 10;
+      background: #0A0A0A;
+      color: var(--text-secondary);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-input);
+      padding: 8px 10px;
+      font: 12px/1.4 var(--font-sans);
+      box-shadow: 0 8px 24px rgba(0,0,0,.35);
+      pointer-events: none;
+    }
+    .toggle {
+      display: flex;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 12px 0;
+      border-bottom: 1px solid var(--border-subtle);
+    }
+    .toggle span { color: var(--text-primary); }
+    .toggle-title { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
+    .toggle-text { min-width: 0; }
+    .toggle small { display: block; color: var(--text-muted); margin-top: 3px; }
+    .dock { padding: 18px 24px; border-top: 1px solid var(--border-subtle); }
+    .header-actions { display: flex; align-items: center; gap: 10px; }
+    .language-select {
+      width: auto;
+      min-width: 118px;
+      padding: 6px 28px 6px 10px;
+      font-size: 12px;
+      font-weight: 700;
+    }
+    @media (max-width: 1040px) {
+      body { min-width: 720px; overflow: auto; }
+      .main { grid-template-columns: 1fr; height: auto; min-height: calc(100vh - 56px); }
+      .left { border-right: 0; border-bottom: 1px solid var(--border-subtle); min-height: 620px; }
+      .right { min-height: 560px; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="brand">
+      <div class="logo">VIDEO MERGE <span class="logo-dot"></span></div>
+      <span class="version-chip">v__APP_VERSION__</span>
+      <button class="btn-icon github-button" id="githubLink" type="button" title="GitHub Repository" aria-label="GitHub Repository">
+        <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.67 0 8.2c0 3.62 2.29 6.69 5.47 7.78.4.08.55-.18.55-.4 0-.2-.01-.84-.01-1.52-2.01.38-2.53-.5-2.69-.97-.09-.24-.48-.97-.82-1.17-.28-.15-.68-.52-.01-.53.63-.01 1.08.59 1.23.83.72 1.24 1.87.89 2.33.68.07-.53.28-.89.51-1.09-1.78-.21-3.64-.91-3.64-4.03 0-.89.31-1.62.82-2.19-.08-.21-.36-1.04.08-2.16 0 0 .67-.22 2.2.84A7.4 7.4 0 0 1 8 4c.68 0 1.36.09 1.99.27 1.53-1.06 2.2-.84 2.2-.84.44 1.12.16 1.95.08 2.16.51.57.82 1.3.82 2.19 0 3.13-1.87 3.82-3.65 4.03.29.26.54.75.54 1.52 0 1.09-.01 1.98-.01 2.25 0 .22.15.48.55.4A8.12 8.12 0 0 0 16 8.2C16 3.67 12.42 0 8 0Z"/></svg>
+      </button>
+    </div>
+    <div class="header-actions">
+      <select class="language-select" id="languageSelect" title="Switch language">
+        <option value="en">English</option>
+        <option value="zh">简体中文</option>
+      </select>
+      <button class="dep-badge" id="ffmpegStatus" type="button"></button>
+    </div>
+  </header>
+  <main class="main">
+    <section class="left">
+      <div class="pane-header">
+        <div>
+          <h2 data-i18n="sourceFiles">Source Files</h2>
+          <div class="label-micro summary" id="summary" data-i18n="noFolderSelected">No folder selected</div>
+        </div>
+        <div class="toolbar">
+          <button id="selectSource" data-i18n="selectFolder">Select Folder</button>
+          <button class="btn-icon" id="refresh" title="Refresh">↻</button>
+        </div>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <colgroup>
+            <col style="width: 34%">
+            <col style="width: 15%">
+            <col style="width: 15%">
+            <col style="width: 12%">
+            <col style="width: 10%">
+            <col style="width: 14%">
+          </colgroup>
+          <thead>
+            <tr>
+              <th data-i18n="filename">Filename</th><th data-i18n="resolution">Resolution</th><th data-i18n="codec">Codec</th><th>FPS</th><th data-i18n="duration">Dur</th><th data-i18n="status">Status</th>
+            </tr>
+          </thead>
+          <tbody id="fileRows"></tbody>
+        </table>
+      </div>
+      <div class="console">
+        <div class="console-head"><span class="label-micro" data-i18n="processConsole">Process Console</span><span class="label-micro" id="progressText">0%</span></div>
+        <div class="logs" id="logs"></div>
+        <div class="bar"><div class="bar-fill" id="bar"></div></div>
+      </div>
+      <div class="plan">
+        <div class="label-micro plan-title" id="planTitle"></div>
+        <div class="plan-text" id="planText"></div>
+      </div>
+    </section>
+    <aside class="right">
+      <h2 class="config-title" data-i18n="configuration">Configuration</h2>
+      <div class="config-scroll">
+        <h3 data-i18n="mergeStrategy">Merge Strategy</h3>
+        <div class="mode-list">
+          <div class="mode-card" data-mode="fast"><div class="mode-head"><span class="mode-title" data-i18n="fastMerge">Fast Merge</span><span class="badge fast" data-i18n="lossless">Lossless</span></div><div class="mode-desc" data-i18n="fastDesc">Stream copy only. Skips incompatible groups.</div></div>
+          <div class="mode-card active" data-mode="optimal"><div class="mode-head"><span class="mode-title" data-i18n="optimalMerge">Optimal Merge</span><span class="badge opt" data-i18n="smart">Smart</span></div><div class="mode-desc" data-i18n="optimalDesc">Groups by orientation and transcodes when needed.</div></div>
+          <div class="mode-card" data-mode="extreme"><div class="mode-head"><span class="mode-title" data-i18n="extremeMerge">Extreme Merge</span><span class="badge extreme" data-i18n="bruteForce">Brute Force</span></div><div class="mode-desc" data-i18n="extremeDesc">Normalizes all files into one output.</div></div>
+        </div>
+        <div class="section">
+          <h3 data-i18n="outputSettings">Output Settings</h3>
+          <div class="field-label label-micro"><span data-i18n="outputFilenamePrefix">Output Filename Prefix</span> <span class="info" data-tip-i18n="tipName">i</span></div>
+          <input id="name" value="Merged_Output">
+          <div class="field-label label-micro"><span data-i18n="outputFolder">Output Folder</span> <span class="info" data-tip-i18n="tipOutputDir">i</span></div>
+          <div class="folder-row"><input id="outputDir" placeholder=""><button id="selectOutput" data-i18n="browse">Browse</button></div>
+          <div class="hint" data-i18n="outputDirHint">Leave empty to use the default merged folder under the source directory.</div>
+          <div class="field-label label-micro"><span data-i18n="tempFolder">Temp Folder</span> <span class="info" data-tip-i18n="tipTempDir">i</span></div>
+          <div class="folder-row"><input id="tempDir" placeholder=""><button id="selectTemp" data-i18n="browse">Browse</button></div>
+          <div class="hint" data-i18n="tempDirHint">Leave empty to use the system default temp directory.</div>
+          <div class="field-label label-micro"><span data-i18n="outputFormat">Output Format</span> <span class="info" data-tip-i18n="tipOutputFormat">i</span></div>
+          <select id="format"><option>mp4</option><option>mkv</option><option>mov</option><option>avi</option><option>ts</option><option>webm</option></select>
+          <div class="field-label label-micro"><span data-i18n="mergeSortOrder">Merge Sort Order</span> <span class="info" data-tip-i18n="tipSortOrder">i</span></div>
+          <select id="sortBy">
+            <option value="name-natural-asc" data-i18n="sortNameNaturalAsc">Filename natural (A-Z)</option>
+            <option value="name-natural-desc" data-i18n="sortNameNaturalDesc">Filename natural (Z-A)</option>
+            <option value="name-asc" data-i18n="sortNameAsc">Filename text (A-Z)</option>
+            <option value="name-desc" data-i18n="sortNameDesc">Filename text (Z-A)</option>
+            <option value="modified-asc" data-i18n="sortModifiedAsc">Modified time (oldest first)</option>
+            <option value="modified-desc" data-i18n="sortModifiedDesc">Modified time (newest first)</option>
+            <option value="size-asc" data-i18n="sortSizeAsc">File size (smallest first)</option>
+            <option value="size-desc" data-i18n="sortSizeDesc">File size (largest first)</option>
+          </select>
+          <div class="field-label label-micro"><span data-i18n="targetVideoCodec">Target Video Codec</span> <span class="info" data-tip-i18n="tipVideoCodec">i</span></div>
+          <select id="codec"><option value="">Auto majority</option><option>h264</option><option>hevc</option><option>vp9</option><option>av1</option><option>mpeg4</option></select>
+          <div class="field-label label-micro"><span data-i18n="gpuAcceleration">GPU Acceleration</span> <span class="info" data-tip-i18n="tipGpu">i</span></div>
+          <select id="gpu"><option value="off">off</option><option value="auto">auto</option><option value="nvenc">nvenc</option><option value="qsv">qsv</option><option value="amf">amf</option><option value="videotoolbox">videotoolbox (macOS)</option></select>
+          <div class="field-label label-micro"><span data-i18n="targetAudioCodec">Target Audio Codec</span> <span class="info" data-tip-i18n="tipAudioCodec">i</span></div>
+          <select id="audioCodec"><option value="">Auto majority</option><option>aac</option><option>mp3</option><option>opus</option><option>vorbis</option><option>pcm_s16le</option></select>
+          <div class="num-row">
+            <div><div class="field-label label-micro"><span data-i18n="crfQuality">CRF (Quality)</span> <span class="info" data-tip-i18n="tipCrf">i</span></div><div class="hint" data-i18n="lowerBetter">Lower = better</div></div>
+            <input id="crf" type="number" min="0" max="51" value="20">
+          </div>
+          <div class="field-label label-micro"><span data-i18n="preset">Preset</span> <span class="info" data-tip-i18n="tipPreset">i</span></div>
+          <select id="preset"><option>ultrafast</option><option>superfast</option><option>veryfast</option><option>faster</option><option>fast</option><option selected>medium</option><option>slow</option><option>slower</option><option>veryslow</option></select>
+          <div class="field-label label-micro"><span data-i18n="fpsPolicy">FPS Policy</span> <span class="info" data-tip-i18n="tipFpsPolicy">i</span></div>
+          <select id="fpsPolicy"><option>majority</option><option>max</option><option>min</option></select>
+          <div class="field-label label-micro"><span data-i18n="resolutionPolicy">Resolution Policy</span> <span class="info" data-tip-i18n="tipResolutionPolicy">i</span></div>
+          <select id="resolutionPolicy"><option>largest</option></select>
+          <div class="field-label label-micro"><span data-i18n="padColor">Pad Color</span> <span class="info" data-tip-i18n="tipPadColor">i</span></div>
+          <input id="padColor" value="black">
+          <div class="field-label label-micro"><span data-i18n="ffmpegPath">FFmpeg Path</span> <span class="info" data-tip-i18n="tipFfmpegPath">i</span></div>
+          <input id="ffmpegPath" placeholder="Optional">
+          <div class="field-label label-micro"><span data-i18n="ffprobePath">FFprobe Path</span> <span class="info" data-tip-i18n="tipFfprobePath">i</span></div>
+          <input id="ffprobePath" placeholder="Optional">
+          <div class="toggle"><div class="toggle-text"><span class="toggle-title"><span data-i18n="recursiveScan">Recursive Scan</span> <span class="info" data-tip-i18n="tipRecursive">i</span></span></div><input id="recursive" type="checkbox" checked></div>
+          <div class="toggle"><div class="toggle-text"><span class="toggle-title"><span data-i18n="overwrite">Overwrite</span> <span class="info" data-tip-i18n="tipOverwrite">i</span></span></div><input id="overwrite" type="checkbox"></div>
+          <div class="toggle"><div class="toggle-text"><span class="toggle-title"><span data-i18n="dryRun">Dry Run</span> <span class="info" data-tip-i18n="tipDryRun">i</span></span></div><input id="dryRun" type="checkbox"></div>
+          <div class="toggle"><div class="toggle-text"><span class="toggle-title"><span data-i18n="keepTempFiles">Keep Temp Files</span> <span class="info" data-tip-i18n="tipKeepTemp">i</span></span></div><input id="keepTemp" type="checkbox"></div>
+          <div class="toggle"><div class="toggle-text"><span class="toggle-title"><span data-i18n="autoDownloadDeps">Auto Download Deps</span> <span class="info" data-tip-i18n="tipAutoDownload">i</span></span></div><input id="autoDownloadDeps" type="checkbox" checked></div>
+        </div>
+      </div>
+      <div class="dock"><button class="btn-primary" id="startMerge"></button></div>
+    </aside>
+  </main>
+  <div class="tooltip" id="tooltip"></div>
+  <script>
+    const messages = {
+      en: {
+        ffmpegNotChecked: "! FFmpeg Not Checked", ffmpegChecking: "... Checking FFmpeg", ffmpegInstalled: "✓ FFmpeg Installed", ffmpegMissing: "! FFmpeg Missing", refreshFfmpeg: "Refresh FFmpeg check",
+        sourceFiles: "Source Files", noFolderSelected: "No folder selected", selectFolder: "Select Folder", filename: "Filename", resolution: "Resolution", codec: "Codec", duration: "Dur", status: "Status",
+        processConsole: "Process Console", configuration: "Configuration", mergeStrategy: "Merge Strategy", outputSettings: "Output Settings", browse: "Browse",
+        fastMerge: "Fast Merge", optimalMerge: "Optimal Merge", extremeMerge: "Extreme Merge", lossless: "Lossless", smart: "Smart", bruteForce: "Brute Force",
+        fastDesc: "Stream copy only. Skips incompatible groups.", optimalDesc: "Groups by orientation and transcodes when needed.", extremeDesc: "Normalizes all files into one output.",
+        outputFilenamePrefix: "Output Filename Prefix", outputFolder: "Output Folder", tempFolder: "Temp Folder", outputFormat: "Output Format", mergeSortOrder: "Merge Sort Order", targetVideoCodec: "Target Video Codec",
+        gpuAcceleration: "GPU Acceleration", targetAudioCodec: "Target Audio Codec", crfQuality: "CRF (Quality)", lowerBetter: "Lower = better", preset: "Preset",
+        fpsPolicy: "FPS Policy", resolutionPolicy: "Resolution Policy", padColor: "Pad Color", ffmpegPath: "FFmpeg Path", ffprobePath: "FFprobe Path",
+        recursiveScan: "Recursive Scan", overwrite: "Overwrite", dryRun: "Dry Run", keepTempFiles: "Keep Temp Files", autoDownloadDeps: "Auto Download Deps",
+        outputDirHint: "Leave empty to use the default merged folder under the source directory.", tempDirHint: "Leave empty to use the system default temp directory.",
+        sortNameNaturalAsc: "Filename natural (A-Z)", sortNameNaturalDesc: "Filename natural (Z-A)", sortNameAsc: "Filename text (A-Z)", sortNameDesc: "Filename text (Z-A)",
+        sortModifiedAsc: "Modified time (oldest first)", sortModifiedDesc: "Modified time (newest first)", sortSizeAsc: "File size (smallest first)", sortSizeDesc: "File size (largest first)",
+        startMerge: "▷ START MERGE", stopMerge: "■ STOP MERGE", switchLanguage: "Switch language",
+        modeSelected: "{mode} MODE SELECTED", selectFolderPlan: "Select a folder to preview the merge plan.",
+        fastPlan: "Tool will stream-copy compatible groups only. Incompatible files will be skipped.",
+        optimalPlan: "Tool will create up to {count} output file(s), separated by landscape and portrait display orientation.",
+        extremePlan: "Tool will normalize all files to one display canvas and produce one output file.",
+        groupLabel: "{orientation} group ({size})", ready: "Ready", needsTranscode: "Needs Transcode", summary: "{files} files detected - {groups} groups",
+        folderCancelled: "Folder selection was cancelled or is unavailable on this system.", scanning: "Scanning {path}", filesAnalyzed: "{count} files analyzed.",
+        startingMerge: "Starting {mode} merge", stoppingMerge: "Stopping current merge task...", selectBegin: "Select a source folder to begin.",
+        tipName: "Maps to --name. Leave empty to use automatic names based on folder, mode, and resolution.",
+        tipOutputDir: "Maps to --output-dir. Leave empty to create/use a merged folder under the source directory.",
+        tipTempDir: "Maps to --temp-dir. Leave empty to use the system default temp directory.",
+        tipOutputFormat: "Maps to --output-format. Supported containers: mp4, mkv, mov, avi, ts, webm.",
+        tipSortOrder: "Maps to --sort-by. Controls the scan, preview, preprocessing, and final merge order.",
+        tipVideoCodec: "Maps to --video-codec. Leave empty for automatic codec selection.",
+        tipGpu: "Maps to --gpu. auto chooses the native encoder when available and falls back to CPU when needed.",
+        tipAudioCodec: "Maps to --audio-codec. Leave empty to use majority vote, defaulting to AAC when needed.",
+        tipCrf: "Maps to --crf. Lower means better quality and larger files.",
+        tipPreset: "Maps to --preset. Slower presets usually produce smaller files at the same CRF but take longer.",
+        tipFpsPolicy: "Maps to --fps-policy. majority uses the most common FPS; max/min choose the highest/lowest FPS.",
+        tipResolutionPolicy: "Maps to --resolution-policy. Currently only largest is supported.",
+        tipPadColor: "Maps to --pad-color. Used when videos are scaled into a canvas without cropping.",
+        tipFfmpegPath: "Maps to --ffmpeg-path. Optional explicit path to ffmpeg binary.",
+        tipFfprobePath: "Maps to --ffprobe-path. Optional explicit path to ffprobe binary.",
+        tipRecursive: "Maps to --recursive / --no-recursive. When enabled, scans subfolders.",
+        tipOverwrite: "Maps to --overwrite. Replace existing output files instead of appending a numeric suffix.",
+        tipDryRun: "Maps to --dry-run. Prints commands and plan without running FFmpeg.",
+        tipKeepTemp: "Maps to --keep-temp. Keeps preprocessed intermediate files for inspection.",
+        tipAutoDownload: "Maps to --auto-download-deps / --no-auto-download-deps. Attempts to download ffmpeg/ffprobe when missing."
+      },
+      zh: {
+        ffmpegNotChecked: "! FFmpeg 未检查", ffmpegChecking: "... 正在检查 FFmpeg", ffmpegInstalled: "✓ FFmpeg 已安装", ffmpegMissing: "! FFmpeg 缺失", refreshFfmpeg: "重新检查 FFmpeg",
+        sourceFiles: "源文件", noFolderSelected: "未选择文件夹", selectFolder: "选择文件夹", filename: "文件名", resolution: "分辨率", codec: "编码", duration: "时长", status: "状态",
+        processConsole: "处理控制台", configuration: "配置", mergeStrategy: "合并策略", outputSettings: "输出设置", browse: "浏览",
+        fastMerge: "快速合并", optimalMerge: "智能合并", extremeMerge: "强制合并", lossless: "无损", smart: "智能", bruteForce: "强制",
+        fastDesc: "仅使用流复制，跳过不兼容分组。", optimalDesc: "按横竖屏分组，必要时转码。", extremeDesc: "统一所有文件到一个输出。",
+        outputFilenamePrefix: "输出文件名前缀", outputFolder: "输出目录", tempFolder: "临时目录", outputFormat: "输出格式", mergeSortOrder: "合并排序方式", targetVideoCodec: "目标视频编码",
+        gpuAcceleration: "GPU 加速", targetAudioCodec: "目标音频编码", crfQuality: "CRF（质量）", lowerBetter: "越低质量越高", preset: "编码预设",
+        fpsPolicy: "帧率策略", resolutionPolicy: "分辨率策略", padColor: "填充颜色", ffmpegPath: "FFmpeg 路径", ffprobePath: "FFprobe 路径",
+        recursiveScan: "递归扫描", overwrite: "覆盖输出", dryRun: "试运行", keepTempFiles: "保留临时文件", autoDownloadDeps: "自动下载依赖",
+        outputDirHint: "留空时默认使用源目录下的 merged 文件夹。", tempDirHint: "留空时使用系统默认临时目录。",
+        sortNameNaturalAsc: "文件名自然升序", sortNameNaturalDesc: "文件名自然降序", sortNameAsc: "文件名文本升序", sortNameDesc: "文件名文本降序",
+        sortModifiedAsc: "修改时间从旧到新", sortModifiedDesc: "修改时间从新到旧", sortSizeAsc: "文件大小从小到大", sortSizeDesc: "文件大小从大到小",
+        startMerge: "▷ 开始合并", stopMerge: "■ 停止合并", switchLanguage: "切换语言",
+        modeSelected: "已选择 {mode} 模式", selectFolderPlan: "选择文件夹后预览合并计划。",
+        fastPlan: "工具将仅对兼容分组合并，跳过不兼容文件。",
+        optimalPlan: "工具将按横竖屏生成最多 {count} 个输出文件。",
+        extremePlan: "工具将把所有文件统一到一个画布并生成一个输出文件。",
+        groupLabel: "{orientation} 分组（{size}）", ready: "就绪", needsTranscode: "需要转码", summary: "检测到 {files} 个文件 - {groups} 个分组",
+        folderCancelled: "文件夹选择已取消，或当前系统不可用。", scanning: "正在扫描 {path}", filesAnalyzed: "已分析 {count} 个文件。",
+        startingMerge: "开始 {mode} 合并", stoppingMerge: "正在停止当前合并任务...", selectBegin: "请选择源文件夹开始。",
+        tipName: "对应 --name。留空时根据文件夹、模式和分辨率自动命名。",
+        tipOutputDir: "对应 --output-dir。留空时在源目录下创建或使用 merged 文件夹。",
+        tipTempDir: "对应 --temp-dir。留空时使用系统默认临时目录。",
+        tipOutputFormat: "对应 --output-format。支持 mp4、mkv、mov、avi、ts、webm。",
+        tipSortOrder: "对应 --sort-by。控制扫描、预览、预处理和最终合并顺序。",
+        tipVideoCodec: "对应 --video-codec。留空时自动选择编码。",
+        tipGpu: "对应 --gpu。auto 会优先选择可用的系统原生编码器，必要时回退 CPU。",
+        tipAudioCodec: "对应 --audio-codec。留空时按多数文件选择，需要时默认 AAC。",
+        tipCrf: "对应 --crf。数值越低质量越高，文件越大。",
+        tipPreset: "对应 --preset。更慢的预设通常体积更小，但耗时更长。",
+        tipFpsPolicy: "对应 --fps-policy。majority 使用最常见帧率，max/min 选择最高/最低帧率。",
+        tipResolutionPolicy: "对应 --resolution-policy。目前仅支持 largest。",
+        tipPadColor: "对应 --pad-color。视频缩放到画布且不裁剪时使用。",
+        tipFfmpegPath: "对应 --ffmpeg-path。可选的 ffmpeg 二进制路径。",
+        tipFfprobePath: "对应 --ffprobe-path。可选的 ffprobe 二进制路径。",
+        tipRecursive: "对应 --recursive / --no-recursive。启用后扫描子文件夹。",
+        tipOverwrite: "对应 --overwrite。替换已有输出，不追加数字后缀。",
+        tipDryRun: "对应 --dry-run。只打印命令和计划，不运行 FFmpeg。",
+        tipKeepTemp: "对应 --keep-temp。保留预处理临时文件用于检查。",
+        tipAutoDownload: "对应 --auto-download-deps / --no-auto-download-deps。缺少 ffmpeg/ffprobe 时尝试自动下载。"
+      }
+    };
+    const state = {
+      mode: "optimal",
+      inputDir: "",
+      files: [],
+      running: false,
+      statusTimer: null,
+      lang: "en",
+      deps: { status: "notChecked", message: "" },
+      defaults: {}
+    };
+    const pathFields = ["outputDir", "tempDir", "ffmpegPath", "ffprobePath"];
+    const $ = (id) => document.getElementById(id);
+    const t = (key, values = {}) => {
+      let text = (messages[state.lang] && messages[state.lang][key]) || messages.en[key] || key;
+      Object.entries(values).forEach(([name, value]) => { text = text.replace(`{${name}}`, value); });
+      return text;
+    };
+    function applyLanguage() {
+      document.documentElement.lang = state.lang === "zh" ? "zh-Hans" : "en";
+      document.querySelectorAll("[data-i18n]").forEach(node => { node.textContent = t(node.dataset.i18n); });
+      document.querySelectorAll("[data-tip-i18n]").forEach(node => { node.dataset.tip = t(node.dataset.tipI18n); });
+      $("languageSelect").value = state.lang;
+      $("languageSelect").title = t("switchLanguage");
+      renderDepStatus();
+      setRunning(state.running);
+      renderModes();
+      if (!state.files.length && !state.inputDir) $("summary").textContent = t("noFolderSelected");
+    }
+    function renderDepStatus() {
+      const keys = {
+        notChecked: "ffmpegNotChecked",
+        checking: "ffmpegChecking",
+        installed: "ffmpegInstalled",
+        missing: "ffmpegMissing"
+      };
+      const badge = $("ffmpegStatus");
+      badge.textContent = t(keys[state.deps.status] || "ffmpegNotChecked");
+      badge.title = state.deps.message ? `${t("refreshFfmpeg")}: ${state.deps.message}` : t("refreshFfmpeg");
+      badge.disabled = state.deps.status === "checking";
+    }
+    function log(message) {
+      const stamp = new Date().toTimeString().slice(0, 8);
+      $("logs").textContent += `[${stamp}] ${message}\n`;
+      $("logs").scrollTop = $("logs").scrollHeight;
+    }
+    function progress(value) {
+      const clamped = Math.max(0, Math.min(100, value));
+      $("progressText").textContent = `${clamped}%`;
+      $("bar").style.width = `${clamped}%`;
+    }
+    function setRunning(running) {
+      state.running = running;
+      const button = $("startMerge");
+      button.textContent = running ? t("stopMerge") : t("startMerge");
+      button.classList.toggle("stop", running);
+    }
+    async function api(path, body) {
+      const response = await fetch(path, {
+        method: body ? "POST" : "GET",
+        headers: body ? {"Content-Type": "application/json"} : undefined,
+        body: body ? JSON.stringify(body) : undefined
+      });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error || payload.message || response.statusText);
+      return payload;
+    }
+    function readConfig() {
+      const values = { lang: state.lang, mode: state.mode };
+      const ids = ["format", "sortBy", "codec", "gpu", "audioCodec", "crf", "preset", "fpsPolicy", "resolutionPolicy", "padColor", "outputDir", "tempDir", "ffmpegPath", "ffprobePath", "recursive", "overwrite", "dryRun", "keepTemp", "autoDownloadDeps"];
+      ids.forEach(id => {
+        const node = $(id);
+        if (pathFields.includes(id) && node.dataset.custom !== "true") return;
+        values[id] = node.type === "checkbox" ? node.checked : node.value;
+      });
+      return values;
+    }
+    function applyConfig(config) {
+      if (!config || typeof config !== "object") return;
+      if (config.lang && messages[config.lang]) state.lang = config.lang;
+      if (config.mode) state.mode = config.mode;
+      Object.entries(config).forEach(([id, value]) => {
+        const node = $(id);
+        if (!node) return;
+        if (pathFields.includes(id)) node.dataset.custom = value ? "true" : "false";
+        if (node.type === "checkbox") node.checked = Boolean(value);
+        else node.value = value;
+      });
+    }
+    async function loadConfig() {
+      try { applyConfig(await api("/config")); } catch (error) { log(`ERROR: ${error.message}`); }
+    }
+    let saveTimer = null;
+    function scheduleSaveConfig() {
+      if (saveTimer) clearTimeout(saveTimer);
+      saveTimer = setTimeout(async () => {
+        try { await api("/config", readConfig()); } catch (error) { log(`ERROR: ${error.message}`); }
+      }, 250);
+    }
+    function applyDefaultPaths() {
+      const mapping = {
+        outputDir: "output_dir",
+        tempDir: "temp_dir",
+        ffmpegPath: "ffmpeg",
+        ffprobePath: "ffprobe"
+      };
+      pathFields.forEach(id => {
+        const node = $(id);
+        if (node.dataset.custom === "true") return;
+        node.value = state.defaults[mapping[id]] || "";
+      });
+    }
+    async function refreshDefaultPaths() {
+      try {
+        state.defaults = await api("/defaults", { input_dir: state.inputDir });
+        applyDefaultPaths();
+      } catch (error) {
+        log(`ERROR: ${error.message}`);
+      }
+    }
+    function configPathValue(id) {
+      const node = $(id);
+      return node.dataset.custom === "true" ? node.value : "";
+    }
+    async function checkDeps() {
+      state.deps = { status: "checking", message: "" };
+      renderDepStatus();
+      try {
+        const payload = await api("/deps");
+        state.defaults.ffmpeg = payload.ffmpeg || state.defaults.ffmpeg || "";
+        state.defaults.ffprobe = payload.ffprobe || state.defaults.ffprobe || "";
+        applyDefaultPaths();
+        state.deps = {
+          status: payload.ok ? "installed" : "missing",
+          message: payload.message || ""
+        };
+        renderDepStatus();
+        log(payload.message);
+      } catch (error) {
+        state.deps = { status: "missing", message: error.message };
+        renderDepStatus();
+        log(`ERROR: ${error.message}`);
+      }
+    }
+    function renderModes() {
+      document.querySelectorAll(".mode-card").forEach(card => {
+        card.classList.toggle("active", card.dataset.mode === state.mode);
+      });
+      $("planTitle").textContent = t("modeSelected", { mode: state.mode.toUpperCase() });
+      updatePlan();
+    }
+    function updatePlan() {
+      if (!state.files.length) {
+        $("planText").textContent = t("selectFolderPlan");
+        return;
+      }
+      const groups = new Set(state.files.map(file => file.orientation));
+      if (state.mode === "fast") {
+        $("planText").textContent = t("fastPlan");
+      } else if (state.mode === "optimal") {
+        $("planText").textContent = t("optimalPlan", { count: groups.size });
+      } else {
+        $("planText").textContent = t("extremePlan");
+      }
+    }
+    function renderFiles(files) {
+      const rows = $("fileRows");
+      rows.innerHTML = "";
+      const by = {};
+      files.forEach(file => {
+        const key = file.orientation || "unknown";
+        (by[key] ||= []).push(file);
+      });
+      Object.entries(by).forEach(([orientation, group]) => {
+        const w = Math.max(...group.map(file => file.display_width));
+        const h = Math.max(...group.map(file => file.display_height));
+        rows.insertAdjacentHTML("beforeend", `<tr class="group-row"><td colspan="6">${t("groupLabel", { orientation, size: `${w}x${h}` })}</td></tr>`);
+        group.forEach(file => {
+          const cls = file.fast_ready ? "status-ok" : "status-warn";
+          const status = file.fast_ready ? t("ready") : t("needsTranscode");
+          rows.insertAdjacentHTML("beforeend", `
+            <tr>
+              <td title="${file.path}">${file.name}</td>
+              <td class="mono">${file.display_width}x${file.display_height}</td>
+              <td class="mono">${file.video_codec}/${file.audio_codec || "none"}</td>
+              <td class="mono">${file.fps}</td>
+              <td class="mono">${file.duration}</td>
+              <td class="${cls}">${status}</td>
+            </tr>`);
+        });
+      });
+      $("summary").textContent = t("summary", { files: files.length, groups: Object.keys(by).length }).toUpperCase();
+      updatePlan();
+    }
+    async function selectFolder(kind) {
+      try {
+        const result = await api(`/pick-folder?kind=${kind}`);
+        if (!result.path) {
+          log(t("folderCancelled"));
+          return;
+        }
+        if (kind === "source") {
+          state.inputDir = result.path;
+          await refreshDefaultPaths();
+          await scan();
+        } else {
+          const id = kind === "temp" ? "tempDir" : "outputDir";
+          $(id).value = result.path;
+          $(id).dataset.custom = "true";
+          scheduleSaveConfig();
+        }
+      } catch (error) { log(`ERROR: ${error.message}`); }
+    }
+    async function scan() {
+      if (!state.inputDir) return selectFolder("source");
+      progress(5);
+      log(t("scanning", { path: state.inputDir }));
+      try {
+        const payload = await api("/scan", { input_dir: state.inputDir, recursive: $("recursive").checked, sort_by: $("sortBy").value });
+        state.files = payload.files;
+        renderFiles(payload.files);
+        progress(100);
+        log(t("filesAnalyzed", { count: payload.files.length }));
+      } catch (error) {
+        progress(0);
+        log(`ERROR: ${error.message}`);
+      }
+    }
+    async function merge() {
+      if (state.running) {
+        await cancelMerge();
+        return;
+      }
+      if (!state.inputDir) {
+        await selectFolder("source");
+        if (!state.inputDir) return;
+      }
+      progress(4);
+      log(t("startingMerge", { mode: state.mode }));
+      try {
+        const payload = await api("/merge", {
+          input_dir: state.inputDir,
+          mode: state.mode,
+          name: $("name").value,
+          output_dir: configPathValue("outputDir"),
+          output_format: $("format").value,
+          sort_by: $("sortBy").value,
+          video_codec: $("codec").value,
+          gpu: $("gpu").value,
+          audio_codec: $("audioCodec").value,
+          crf: Number($("crf").value),
+          preset: $("preset").value,
+          fps_policy: $("fpsPolicy").value,
+          resolution_policy: $("resolutionPolicy").value,
+          pad_color: $("padColor").value,
+          ffmpeg_path: configPathValue("ffmpegPath"),
+          ffprobe_path: configPathValue("ffprobePath"),
+          temp_dir: configPathValue("tempDir"),
+          recursive: $("recursive").checked,
+          overwrite: $("overwrite").checked,
+          dry_run: $("dryRun").checked,
+          keep_temp: $("keepTemp").checked,
+          auto_download_deps: $("autoDownloadDeps").checked
+        });
+        setRunning(true);
+        log(`Command: ${payload.command.join(" ")}`);
+        if (state.statusTimer) clearInterval(state.statusTimer);
+        state.statusTimer = setInterval(async () => {
+          const status = await api("/status");
+          $("logs").textContent = status.logs.join("\n") + (status.logs.length ? "\n" : "");
+          $("logs").scrollTop = $("logs").scrollHeight;
+          progress(status.progress);
+          setRunning(status.running);
+          if (!status.running) {
+            clearInterval(state.statusTimer);
+            state.statusTimer = null;
+          }
+        }, 500);
+      } catch (error) {
+        progress(0);
+        setRunning(false);
+        log(`ERROR: ${error.message}`);
+      }
+    }
+    async function cancelMerge() {
+      try {
+        log(t("stoppingMerge"));
+        await api("/cancel", {});
+      } catch (error) {
+        log(`ERROR: ${error.message}`);
+      }
+    }
+    document.querySelectorAll(".mode-card").forEach(card => card.addEventListener("click", () => {
+      state.mode = card.dataset.mode;
+      renderModes();
+      scheduleSaveConfig();
+    }));
+    $("selectSource").addEventListener("click", () => selectFolder("source"));
+    $("selectOutput").addEventListener("click", () => selectFolder("output"));
+    $("selectTemp").addEventListener("click", () => selectFolder("temp"));
+    $("refresh").addEventListener("click", scan);
+    $("startMerge").addEventListener("click", merge);
+    $("githubLink").addEventListener("click", async () => {
+      try { await api("/open-url", { url: "__REPOSITORY_URL__" }); } catch (error) { log(`ERROR: ${error.message}`); }
+    });
+    $("languageSelect").addEventListener("change", () => {
+      state.lang = $("languageSelect").value;
+      applyLanguage();
+      if (state.files.length) renderFiles(state.files);
+      scheduleSaveConfig();
+    });
+    ["format", "sortBy", "codec", "gpu", "audioCodec", "crf", "preset", "fpsPolicy", "resolutionPolicy", "padColor", "outputDir", "tempDir", "ffmpegPath", "ffprobePath", "recursive", "overwrite", "dryRun", "keepTemp", "autoDownloadDeps"].forEach(id => {
+      const node = $(id);
+      if (pathFields.includes(id)) {
+        node.addEventListener("input", () => {
+          node.dataset.custom = node.value.trim() ? "true" : "false";
+          if (node.dataset.custom !== "true") refreshDefaultPaths();
+        });
+      }
+      node.addEventListener(node.type === "checkbox" ? "change" : "input", scheduleSaveConfig);
+      node.addEventListener("change", scheduleSaveConfig);
+    });
+    $("ffmpegStatus").addEventListener("click", checkDeps);
+    document.querySelectorAll(".info").forEach(icon => {
+      icon.addEventListener("mouseenter", () => {
+        const tip = $("tooltip");
+        tip.textContent = icon.dataset.tip || "";
+        tip.style.display = "block";
+        const rect = icon.getBoundingClientRect();
+        const width = Math.min(300, Math.max(220, tip.offsetWidth || 260));
+        let left = rect.right + 10;
+        if (left + width > window.innerWidth - 12) left = rect.left - width - 10;
+        if (left < 12) left = 12;
+        let top = rect.top - 8;
+        const height = tip.offsetHeight || 48;
+        if (top + height > window.innerHeight - 12) top = window.innerHeight - height - 12;
+        if (top < 12) top = 12;
+        tip.style.left = `${left}px`;
+        tip.style.top = `${top}px`;
+      });
+      icon.addEventListener("mouseleave", () => {
+        $("tooltip").style.display = "none";
+      });
+    });
+    (async () => {
+      await loadConfig();
+      await refreshDefaultPaths();
+      applyLanguage();
+      log(t("selectBegin"));
+      checkDeps();
+    })();
+  </script>
+</body>
+</html>
+"""
+
+
+class GuiState:
+    def __init__(self) -> None:
+        self.logs: list[str] = []
+        self.progress = 0
+        self.running = False
+        self.cancel_requested = False
+        self.process: subprocess.Popen[str] | None = None
+        self.cleanup_temp_on_cancel = True
+        self.temp_paths: list[Path] = []
+        self.lock = threading.Lock()
+
+    def log(self, message: str) -> None:
+        stamp = time.strftime("%H:%M:%S")
+        with self.lock:
+            self.logs.append(f"[{stamp}] {message}")
+            self.logs = self.logs[-400:]
+
+    def set_progress(self, value: int) -> None:
+        with self.lock:
+            self.progress = max(0, min(100, value))
+
+    def snapshot(self) -> dict[str, object]:
+        with self.lock:
+            return {"logs": list(self.logs), "progress": self.progress, "running": self.running}
+
+    def begin_run(self, cleanup_temp_on_cancel: bool = True) -> bool:
+        with self.lock:
+            if self.running:
+                return False
+            self.logs.clear()
+            self.progress = 4
+            self.running = True
+            self.cancel_requested = False
+            self.process = None
+            self.cleanup_temp_on_cancel = cleanup_temp_on_cancel
+            self.temp_paths.clear()
+            return True
+
+    def start_process(self, process: subprocess.Popen[str]) -> bool:
+        with self.lock:
+            self.process = process
+            return self.cancel_requested
+
+    def cancel_running_process(self) -> bool:
+        with self.lock:
+            process = self.process
+            if not self.running:
+                return False
+            self.cancel_requested = True
+            if process is None or process.poll() is not None:
+                return True
+        _terminate_process(process)
+        return True
+
+    def finish_process(self) -> bool:
+        with self.lock:
+            was_cancelled = self.cancel_requested
+            self.process = None
+            self.running = False
+            self.cancel_requested = False
+            return was_cancelled
+
+    def record_temp_path(self, path: Path) -> None:
+        with self.lock:
+            if path not in self.temp_paths:
+                self.temp_paths.append(path)
+
+    def consume_cancel_cleanup_paths(self) -> list[Path]:
+        with self.lock:
+            paths = list(self.temp_paths) if self.cleanup_temp_on_cancel else []
+            self.temp_paths.clear()
+            self.cleanup_temp_on_cancel = True
+            return paths
 
 
 class QueueLogHandler(logging.Handler):
-    def __init__(self, output_queue: queue.Queue[tuple[str, object]]) -> None:
+    def __init__(self, state: GuiState) -> None:
         super().__init__()
-        self.output_queue = output_queue
+        self.state = state
 
     def emit(self, record: logging.LogRecord) -> None:
-        self.output_queue.put(("log", self.format(record)))
+        self.state.log(self.format(record))
 
 
-class VideoMergeGUI:
-    def __init__(self) -> None:
-        self.root = tk.Tk()
-        self.root.title("VideoMergingTool")
-        self.root.geometry("1320x760")
-        self.root.minsize(1040, 640)
-        self.root.configure(bg=COLORS["bg"])
+def launch_gui(host: str = "127.0.0.1", port: int | None = None) -> None:
+    port = port or _free_port()
+    state = GuiState()
+    server = ThreadingHTTPServer((host, port), _make_handler(state))
+    url = f"http://{host}:{port}"
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    print(f"VideoMergingTool GUI running at {url}")
+    try:
+        _open_desktop_window(url)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        server.shutdown()
+        server.server_close()
 
-        self.events: queue.Queue[tuple[str, object]] = queue.Queue()
-        self.input_dir: Path | None = None
-        self.tools: ToolPaths | None = None
-        self.media_files: list[VideoFile] = []
-        self.is_busy = False
 
-        self.mode_var = tk.StringVar(value=MergeMode.optimal.value)
-        self.name_var = tk.StringVar(value="Merged_Output")
-        self.codec_var = tk.StringVar(value="h264")
-        self.format_var = tk.StringVar(value="mp4")
-        self.crf_var = tk.IntVar(value=20)
-        self.dry_run_var = tk.BooleanVar(value=False)
-        self.keep_temp_var = tk.BooleanVar(value=False)
-        self.recursive_var = tk.BooleanVar(value=True)
+def _open_desktop_window(url: str) -> None:
+    try:
+        import webview
+    except ImportError as exc:
+        raise RuntimeError(
+            "Desktop GUI requires pywebview. Install dependencies with `pip install -r requirements.txt`."
+        ) from exc
 
-        self._build_styles()
-        self._build_layout()
-        self._set_ffmpeg_status("FFmpeg Not Checked", "warn")
-        self._set_summary("No folder selected")
-        self._log("Select a source folder to begin.")
-        self.root.after(100, self._process_events)
+    webview.create_window(f"VideoMergingTool {__version__}", url, width=1280, height=820, min_size=(900, 620))
+    webview.start()
 
-    def run(self) -> None:
-        self.root.mainloop()
 
-    def _build_styles(self) -> None:
-        style = ttk.Style(self.root)
-        try:
-            style.theme_use("clam")
-        except tk.TclError:
-            pass
-        style.configure(
-            "Files.Treeview",
-            background=COLORS["panel"],
-            foreground=COLORS["text"],
-            fieldbackground=COLORS["panel"],
-            bordercolor=COLORS["border"],
-            rowheight=30,
-            font=("Segoe UI", 10),
-        )
-        style.configure(
-            "Files.Treeview.Heading",
-            background=COLORS["panel"],
-            foreground=COLORS["muted"],
-            relief="flat",
-            font=("Segoe UI", 9, "bold"),
-        )
-        style.map("Files.Treeview", background=[("selected", COLORS["panel_hover"])])
-        style.configure(
-            "Dark.Horizontal.TProgressbar",
-            troughcolor="#222222",
-            background=COLORS["red"],
-            bordercolor="#222222",
-            lightcolor=COLORS["red"],
-            darkcolor=COLORS["red"],
-        )
-
-    def _build_layout(self) -> None:
-        self._build_header()
-
-        main = tk.Frame(self.root, bg=COLORS["bg"])
-        main.pack(fill=tk.BOTH, expand=True)
-        main.columnconfigure(0, weight=1)
-        main.columnconfigure(1, weight=0, minsize=360)
-        main.rowconfigure(0, weight=1)
-
-        self.left = tk.Frame(main, bg=COLORS["bg"], highlightthickness=1, highlightbackground=COLORS["border"])
-        self.left.grid(row=0, column=0, sticky="nsew")
-        self.right = tk.Frame(main, bg=COLORS["panel"], width=380)
-        self.right.grid(row=0, column=1, sticky="nsew")
-        self.right.grid_propagate(False)
-
-        self._build_left_pane()
-        self._build_right_pane()
-
-    def _build_header(self) -> None:
-        header = tk.Frame(self.root, bg=COLORS["bg"], height=56, highlightthickness=1, highlightbackground=COLORS["border"])
-        header.pack(fill=tk.X)
-        header.pack_propagate(False)
-
-        logo = tk.Frame(header, bg=COLORS["bg"])
-        logo.pack(side=tk.LEFT, padx=18)
-        tk.Label(
-            logo,
-            text="VIDEO MERGE",
-            bg=COLORS["bg"],
-            fg=COLORS["text"],
-            font=("Segoe UI", 13, "bold"),
-        ).pack(side=tk.LEFT)
-        tk.Label(logo, text="●", bg=COLORS["bg"], fg=COLORS["red"], font=("Segoe UI", 10, "bold")).pack(side=tk.LEFT, padx=(4, 0))
-
-        self.ffmpeg_badge = tk.Label(
-            header,
-            bg=COLORS["panel"],
-            fg=COLORS["secondary"],
-            bd=1,
-            relief=tk.SOLID,
-            padx=12,
-            pady=4,
-            font=("Segoe UI", 9),
-        )
-        self.ffmpeg_badge.pack(side=tk.RIGHT, padx=18)
-
-    def _build_left_pane(self) -> None:
-        header = tk.Frame(self.left, bg=COLORS["bg"], height=76)
-        header.pack(fill=tk.X, padx=16, pady=(14, 8))
-        header.columnconfigure(0, weight=1)
-
-        tk.Label(header, text="Source Files", bg=COLORS["bg"], fg=COLORS["text"], font=("Segoe UI", 12, "bold")).grid(
-            row=0, column=0, sticky="w"
-        )
-        self.summary_label = tk.Label(
-            header,
-            text="",
-            bg=COLORS["bg"],
-            fg=COLORS["muted"],
-            font=("Segoe UI", 8, "bold"),
-        )
-        self.summary_label.grid(row=1, column=0, sticky="w", pady=(8, 0))
-
-        select_button = self._button(header, "▣  Select Folder", self.select_folder, secondary=True)
-        select_button.grid(row=0, column=1, rowspan=2, sticky="e", padx=(8, 6))
-        refresh_button = self._button(header, "↻", self.refresh_folder, icon=True)
-        refresh_button.grid(row=0, column=2, rowspan=2, sticky="e")
-
-        table_frame = tk.Frame(self.left, bg=COLORS["panel"], highlightthickness=1, highlightbackground=COLORS["border"])
-        table_frame.pack(fill=tk.BOTH, expand=True, padx=16, pady=(4, 12))
-        columns = ("filename", "resolution", "codec", "fps", "duration", "status")
-        self.files_tree = ttk.Treeview(table_frame, columns=columns, show="headings", style="Files.Treeview")
-        headings = {
-            "filename": "FILENAME",
-            "resolution": "RESOLUTION",
-            "codec": "CODEC",
-            "fps": "FPS",
-            "duration": "DUR",
-            "status": "STATUS",
-        }
-        widths = {
-            "filename": 300,
-            "resolution": 130,
-            "codec": 120,
-            "fps": 90,
-            "duration": 90,
-            "status": 140,
-        }
-        for col in columns:
-            self.files_tree.heading(col, text=headings[col])
-            self.files_tree.column(col, width=widths[col], anchor=tk.W)
-        scrollbar = ttk.Scrollbar(table_frame, orient=tk.VERTICAL, command=self.files_tree.yview)
-        self.files_tree.configure(yscrollcommand=scrollbar.set)
-        self.files_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-        self.files_tree.tag_configure("group", background=COLORS["bg"], foreground=COLORS["secondary"])
-        self.files_tree.tag_configure("ok", foreground=COLORS["green"])
-        self.files_tree.tag_configure("warn", foreground=COLORS["yellow"])
-
-        self.plan_frame = tk.Frame(self.left, bg=COLORS["panel"], highlightthickness=1, highlightbackground=COLORS["border"])
-        self.plan_frame.pack(fill=tk.X, padx=16, pady=(0, 16))
-        self.plan_title = tk.Label(
-            self.plan_frame,
-            text="OPTIMAL MODE SELECTED",
-            bg=COLORS["panel"],
-            fg=COLORS["red"],
-            font=("Segoe UI", 9, "bold"),
-        )
-        self.plan_title.pack(anchor="w", padx=12, pady=(12, 4))
-        self.plan_text = tk.Label(
-            self.plan_frame,
-            text="Select a folder to preview the merge plan.",
-            bg=COLORS["panel"],
-            fg=COLORS["secondary"],
-            justify=tk.LEFT,
-            wraplength=820,
-            font=("Segoe UI", 10),
-        )
-        self.plan_text.pack(anchor="w", fill=tk.X, padx=12, pady=(0, 12))
-
-    def _build_right_pane(self) -> None:
-        tk.Label(
-            self.right,
-            text="Configuration",
-            bg=COLORS["panel"],
-            fg=COLORS["text"],
-            font=("Segoe UI", 12, "bold"),
-        ).pack(anchor="w", padx=16, pady=(18, 24))
-
-        content = tk.Frame(self.right, bg=COLORS["panel"])
-        content.pack(fill=tk.BOTH, expand=True, padx=16)
-
-        self._section_label(content, "MERGE STRATEGY")
-        self.mode_cards: dict[str, tk.Frame] = {}
-        self._mode_card(content, MergeMode.fast.value, "Fast Merge", "LOSSLESS", "Stream copy only. Skips incompatible groups.")
-        self._mode_card(content, MergeMode.optimal.value, "Optimal Merge", "SMART", "Groups by orientation and transcodes when needed.")
-        self._mode_card(content, MergeMode.extreme.value, "Extreme Merge", "BRUTE FORCE", "Normalizes all files into one output.")
-        self._refresh_mode_cards()
-
-        self._section_label(content, "OUTPUT SETTINGS", pady=(22, 8))
-        self._labeled_entry(content, "OUTPUT FILENAME PREFIX", self.name_var)
-        self._labeled_option(content, "OUTPUT FORMAT", self.format_var, ["mp4", "mkv", "mov", "webm"])
-        self._labeled_option(content, "TARGET CODEC", self.codec_var, ["h264", "hevc", "vp9"])
-
-        row = tk.Frame(content, bg=COLORS["panel"])
-        row.pack(fill=tk.X, pady=(10, 12))
-        tk.Label(row, text="CRF (QUALITY)\nLower = better", bg=COLORS["panel"], fg=COLORS["muted"], font=("Segoe UI", 8, "bold")).pack(
-            side=tk.LEFT
-        )
-        tk.Spinbox(
-            row,
-            from_=0,
-            to=51,
-            textvariable=self.crf_var,
-            width=6,
-            bg=COLORS["input"],
-            fg=COLORS["text"],
-            insertbackground=COLORS["text"],
-            relief=tk.FLAT,
-            justify=tk.RIGHT,
-        ).pack(side=tk.RIGHT)
-
-        self._check(content, "Recursive Scan", "Scan subfolders", self.recursive_var)
-        self._check(content, "Dry Run", "Simulate FFmpeg commands only", self.dry_run_var)
-        self._check(content, "Keep Temp Files", "Keep preprocessed files for inspection", self.keep_temp_var)
-
-        self._build_console(content)
-
-        dock = tk.Frame(self.right, bg=COLORS["panel"], highlightthickness=1, highlightbackground=COLORS["border"])
-        dock.pack(fill=tk.X, side=tk.BOTTOM, padx=16, pady=16)
-        self.start_button = self._button(dock, "▷  START MERGE", self.start_merge, primary=True)
-        self.start_button.pack(fill=tk.X, pady=8)
-
-    def _build_console(self, parent: tk.Widget) -> None:
-        console = tk.Frame(parent, bg=COLORS["console"], highlightthickness=1, highlightbackground="#1A1A1A")
-        console.pack(fill=tk.BOTH, expand=True, pady=(18, 0))
-        header = tk.Frame(console, bg=COLORS["console"])
-        header.pack(fill=tk.X, padx=12, pady=(10, 0))
-        tk.Label(header, text="PROCESS CONSOLE", bg=COLORS["console"], fg=COLORS["muted"], font=("Segoe UI", 8, "bold")).pack(
-            side=tk.LEFT
-        )
-        self.progress_label = tk.Label(header, text="0%", bg=COLORS["console"], fg=COLORS["secondary"], font=("Segoe UI", 8, "bold"))
-        self.progress_label.pack(side=tk.RIGHT)
-        self.console = tk.Text(
-            console,
-            height=9,
-            bg=COLORS["console"],
-            fg=COLORS["secondary"],
-            insertbackground=COLORS["text"],
-            bd=0,
-            highlightthickness=0,
-            font=("Consolas", 9),
-            wrap=tk.WORD,
-        )
-        self.console.pack(fill=tk.BOTH, expand=True, padx=12, pady=8)
-        self.progress = ttk.Progressbar(console, style="Dark.Horizontal.TProgressbar", mode="determinate", maximum=100)
-        self.progress.pack(fill=tk.X, padx=12, pady=(0, 12))
-
-    def _section_label(self, parent: tk.Widget, text: str, pady: tuple[int, int] = (0, 8)) -> None:
-        tk.Label(parent, text=text, bg=COLORS["panel"], fg=COLORS["muted"], font=("Segoe UI", 8, "bold")).pack(
-            anchor="w", pady=pady
-        )
-
-    def _mode_card(self, parent: tk.Widget, value: str, title: str, badge: str, desc: str) -> None:
-        frame = tk.Frame(parent, bg=COLORS["bg"], highlightthickness=1, highlightbackground=COLORS["border"], cursor="hand2")
-        frame.pack(fill=tk.X, pady=5)
-        frame.bind("<Button-1>", lambda _event, mode=value: self._set_mode(mode))
-        top = tk.Frame(frame, bg=COLORS["bg"])
-        top.pack(fill=tk.X, padx=12, pady=(10, 2))
-        tk.Label(top, text=title, bg=COLORS["bg"], fg=COLORS["text"], font=("Segoe UI", 10, "bold")).pack(side=tk.LEFT)
-        tk.Label(top, text=badge, bg=COLORS["panel_hover"], fg=COLORS["secondary"], font=("Segoe UI", 7, "bold")).pack(side=tk.RIGHT)
-        tk.Label(frame, text=desc, bg=COLORS["bg"], fg=COLORS["secondary"], justify=tk.LEFT, wraplength=310, font=("Segoe UI", 9)).pack(
-            anchor="w", padx=12, pady=(0, 10)
-        )
-        self.mode_cards[value] = frame
-
-    def _labeled_entry(self, parent: tk.Widget, label: str, variable: tk.StringVar) -> None:
-        self._section_label(parent, label, pady=(8, 4))
-        entry = tk.Entry(parent, textvariable=variable, bg=COLORS["input"], fg=COLORS["text"], insertbackground=COLORS["text"], relief=tk.FLAT)
-        entry.pack(fill=tk.X, ipady=7)
-
-    def _labeled_option(self, parent: tk.Widget, label: str, variable: tk.StringVar, values: list[str]) -> None:
-        self._section_label(parent, label, pady=(12, 4))
-        menu = tk.OptionMenu(parent, variable, *values)
-        menu.configure(bg=COLORS["input"], fg=COLORS["text"], activebackground=COLORS["panel_hover"], relief=tk.FLAT)
-        menu["menu"].configure(bg=COLORS["input"], fg=COLORS["text"])
-        menu.pack(fill=tk.X)
-
-    def _check(self, parent: tk.Widget, title: str, desc: str, variable: tk.BooleanVar) -> None:
-        row = tk.Frame(parent, bg=COLORS["panel"], highlightthickness=1, highlightbackground=COLORS["border"])
-        row.pack(fill=tk.X, pady=5)
-        text = tk.Frame(row, bg=COLORS["panel"])
-        text.pack(side=tk.LEFT, padx=0, pady=8)
-        tk.Label(text, text=title, bg=COLORS["panel"], fg=COLORS["text"], font=("Segoe UI", 9)).pack(anchor="w")
-        tk.Label(text, text=desc, bg=COLORS["panel"], fg=COLORS["muted"], font=("Segoe UI", 8)).pack(anchor="w")
-        tk.Checkbutton(
-            row,
-            variable=variable,
-            bg=COLORS["panel"],
-            activebackground=COLORS["panel"],
-            selectcolor=COLORS["input"],
-            fg=COLORS["text"],
-        ).pack(side=tk.RIGHT)
-
-    def _button(
-        self,
-        parent: tk.Widget,
-        text: str,
-        command,
-        primary: bool = False,
-        secondary: bool = False,
-        icon: bool = False,
-    ) -> tk.Button:
-        bg = COLORS["text"] if primary else COLORS["bg"]
-        fg = COLORS["bg"] if primary else COLORS["text"]
-        if icon:
-            fg = COLORS["secondary"]
-        return tk.Button(
-            parent,
-            text=text,
-            command=command,
-            bg=bg,
-            fg=fg,
-            activebackground=COLORS["panel_hover"],
-            activeforeground=fg,
-            relief=tk.FLAT if primary else tk.SOLID,
-            bd=0 if primary else 1,
-            padx=14 if not icon else 8,
-            pady=8,
-            font=("Segoe UI", 9, "bold" if primary else "normal"),
-            cursor="hand2",
-        )
-
-    def _set_mode(self, mode: str) -> None:
-        self.mode_var.set(mode)
-        self._refresh_mode_cards()
-        self._update_plan()
-
-    def _refresh_mode_cards(self) -> None:
-        for value, frame in self.mode_cards.items():
-            active = value == self.mode_var.get()
-            frame.configure(highlightbackground=COLORS["red"] if active else COLORS["border"])
-
-    def select_folder(self) -> None:
-        folder = filedialog.askdirectory(title="Select source video folder")
-        if folder:
-            self.input_dir = Path(folder)
-            self.scan_folder()
-
-    def refresh_folder(self) -> None:
-        if self.input_dir is None:
-            self.select_folder()
+def _make_handler(state: GuiState):
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, _format: str, *args: object) -> None:
             return
-        self.scan_folder()
 
-    def scan_folder(self) -> None:
-        if self.input_dir is None or self.is_busy:
-            return
-        self.is_busy = True
-        self._set_progress(0)
-        self._clear_table()
-        self._log(f"Scanning {self.input_dir}")
-        thread = threading.Thread(target=self._scan_worker, daemon=True)
-        thread.start()
+        def do_GET(self) -> None:
+            parsed = urlparse(self.path)
+            if parsed.path == "/":
+                self._send_html(HTML)
+                return
+            if parsed.path == "/pick-folder":
+                kind = parse_qs(parsed.query).get("kind", ["source"])[0]
+                self._send_json({"path": _pick_folder(kind)})
+                return
+            if parsed.path == "/deps":
+                self._deps()
+                return
+            if parsed.path == "/status":
+                self._send_json(state.snapshot())
+                return
+            if parsed.path == "/config":
+                self._send_json(_load_gui_config())
+                return
+            if parsed.path == "/defaults":
+                self._send_json(_default_display_paths())
+                return
+            self._send_json({"error": "Not found"}, HTTPStatus.NOT_FOUND)
 
-    def _scan_worker(self) -> None:
-        assert self.input_dir is not None
-        logger = self._queue_logger()
-        try:
-            self.events.put(("progress", 8))
-            tools = resolve_tools(logger, True, Path.cwd() / ".tools" / "ffmpeg")
-            self.tools = tools
-            self.events.put(("ffmpeg", ("FFmpeg Installed", "ok")))
-            paths = scan_video_files(self.input_dir, self.recursive_var.get())
-            self.events.put(("progress", 25))
-            media_files, failures = probe_files(paths, tools, logger)
-            self.events.put(("scan_done", (media_files, failures, len(paths))))
-        except Exception as exc:
-            self.events.put(("error", str(exc)))
+        def do_POST(self) -> None:
+            parsed = urlparse(self.path)
+            payload = self._read_json()
+            if parsed.path == "/scan":
+                self._scan(payload)
+                return
+            if parsed.path == "/merge":
+                self._merge(payload)
+                return
+            if parsed.path == "/cancel":
+                self._cancel()
+                return
+            if parsed.path == "/config":
+                _save_gui_config(payload)
+                self._send_json({"ok": True})
+                return
+            if parsed.path == "/defaults":
+                self._send_json(_default_display_paths(str(payload.get("input_dir") or "")))
+                return
+            if parsed.path == "/open-url":
+                self._open_url(payload)
+                return
+            self._send_json({"error": "Not found"}, HTTPStatus.NOT_FOUND)
 
-    def start_merge(self) -> None:
-        if self.input_dir is None:
-            messagebox.showwarning("No folder", "Select a source folder first.")
-            return
-        if self.is_busy:
-            return
-        self.is_busy = True
-        self._set_progress(0)
-        self._log(f"Starting {self.mode_var.get()} merge")
-        threading.Thread(target=self._merge_worker, daemon=True).start()
-
-    def _merge_worker(self) -> None:
-        assert self.input_dir is not None
-        cmd = self._build_merge_command()
-        self.events.put(("log", "Command: " + " ".join(f'"{part}"' if " " in part else part for part in cmd)))
-        self.events.put(("progress", 5))
-        try:
-            process = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-            )
-            assert process.stdout is not None
-            for line in process.stdout:
-                self.events.put(("log", line.rstrip()))
-                self._maybe_update_progress_from_line(line)
-            code = process.wait()
-            if code == 0:
-                self.events.put(("progress", 100))
-                self.events.put(("done", "Merge completed."))
-            else:
-                self.events.put(("error", f"Merge failed with exit code {code}."))
-        except Exception as exc:
-            self.events.put(("error", str(exc)))
-
-    def _build_merge_command(self) -> list[str]:
-        if getattr(sys, "frozen", False):
-            cmd = [sys.executable, "merge", str(self.input_dir)]
-        else:
-            main_py = Path(__file__).resolve().parents[1] / "main.py"
-            cmd = [sys.executable, str(main_py), "merge", str(self.input_dir)]
-        cmd.extend(["--mode", self.mode_var.get()])
-        cmd.extend(["--output-format", self.format_var.get()])
-        name = self.name_var.get().strip()
-        if name:
-            cmd.extend(["--name", name])
-        codec = self.codec_var.get()
-        if codec:
-            cmd.extend(["--video-codec", codec])
-        cmd.extend(["--crf", str(self.crf_var.get())])
-        if not self.recursive_var.get():
-            cmd.append("--no-recursive")
-        if self.dry_run_var.get():
-            cmd.append("--dry-run")
-        if self.keep_temp_var.get():
-            cmd.append("--keep-temp")
-        return cmd
-
-    def _maybe_update_progress_from_line(self, line: str) -> None:
-        lowered = line.lower()
-        if "media:" in lowered:
-            self.events.put(("progress", 18))
-        elif "preprocess" in lowered:
-            self.events.put(("progress", 45))
-        elif "merge order" in lowered:
-            self.events.put(("progress", 72))
-        elif "output written" in lowered:
-            self.events.put(("progress", 92))
-
-    def _process_events(self) -> None:
-        while True:
+        def _deps(self) -> None:
             try:
-                kind, payload = self.events.get_nowait()
-            except queue.Empty:
-                break
-            if kind == "log":
-                self._log(str(payload))
-            elif kind == "progress":
-                self._set_progress(int(payload))
-            elif kind == "ffmpeg":
-                label, state = payload  # type: ignore[misc]
-                self._set_ffmpeg_status(str(label), str(state))
-            elif kind == "scan_done":
-                media_files, failures, total = payload  # type: ignore[misc]
-                self._on_scan_done(media_files, failures, total)
-            elif kind == "done":
-                self._log(str(payload))
-                self.is_busy = False
-            elif kind == "error":
-                self._log("ERROR: " + str(payload))
-                self._set_progress(0)
-                self.is_busy = False
-                messagebox.showerror("VideoMergingTool", str(payload))
-        self.root.after(100, self._process_events)
-
-    def _on_scan_done(self, media_files: list[VideoFile], failures: dict[Path, str], total: int) -> None:
-        self.media_files = media_files
-        self._populate_table(media_files)
-        groups = split_by_orientation(media_files)
-        self._set_summary(f"{len(media_files)} files detected • {len(groups)} groups")
-        if failures:
-            self._log(f"{len(failures)} file(s) could not be analyzed.")
-        self._update_plan()
-        self._set_progress(100)
-        self.is_busy = False
-
-    def _populate_table(self, files: list[VideoFile]) -> None:
-        self._clear_table()
-        fast_groups = group_fast(files)
-        by_orientation = split_by_orientation(files)
-        for orientation in (Orientation.landscape, Orientation.portrait):
-            group = by_orientation.get(orientation, [])
-            if not group:
-                continue
-            max_width = max(file.display_width for file in group)
-            max_height = max(file.display_height for file in group)
-            self.files_tree.insert(
-                "",
-                tk.END,
-                values=(f"{orientation.value.title()} Group ({max_width}x{max_height})", "", "", "", "", ""),
-                tags=("group",),
-            )
-            for file in group:
-                fast_ready = any(file in members and len(members) > 1 for members in fast_groups.values())
-                status = "Ready" if fast_ready else "Needs Transcode"
-                tag = "ok" if fast_ready else "warn"
-                self.files_tree.insert(
-                    "",
-                    tk.END,
-                    values=(
-                        file.path.name,
-                        f"{file.display_width}x{file.display_height}",
-                        f"{file.video_codec}/{file.audio_codec or 'none'}",
-                        f"{file.frame_rate_float:.2f}" if file.frame_rate_float else file.frame_rate,
-                        _format_duration(file.duration),
-                        status,
-                    ),
-                    tags=(tag,),
+                logger = _gui_logger(state)
+                tools = resolve_tools(logger, True, default_tools_dir())
+                encoders = _detect_gui_ffmpeg_encoders(tools)
+                gpu_encoders = sorted(
+                    encoder
+                    for encoder in encoders
+                    if encoder.endswith(("_nvenc", "_qsv", "_amf", "_videotoolbox"))
                 )
+                recommended_gpu = _recommended_gpu_mode(gpu_encoders)
+                self._send_json(
+                    {
+                        "ok": True,
+                        "message": f"FFmpeg ready: {tools.ffmpeg}. GPU encoders: {', '.join(gpu_encoders) if gpu_encoders else 'none detected'}. Recommended GPU mode: {recommended_gpu}.",
+                        "ffmpeg": str(tools.ffmpeg),
+                        "ffprobe": str(tools.ffprobe),
+                        "gpu_encoders": gpu_encoders,
+                        "gpu_recommended": recommended_gpu,
+                        "platform": platform.system(),
+                    }
+                )
+            except Exception as exc:
+                self._send_json({"ok": False, "message": str(exc)}, HTTPStatus.INTERNAL_SERVER_ERROR)
 
-    def _update_plan(self) -> None:
-        mode = self.mode_var.get()
-        self.plan_title.configure(text=f"{mode.upper()} MODE SELECTED")
-        if not self.media_files:
-            self.plan_text.configure(text="Select a folder to preview the merge plan.")
-            return
-        groups = split_by_orientation(self.media_files)
-        if mode == MergeMode.fast.value:
-            fast_group_count = sum(1 for members in group_fast(self.media_files).values() if len(members) > 1)
-            text = f"Tool will stream-copy compatible groups only. {fast_group_count} group(s) can be merged without transcoding."
-        elif mode == MergeMode.optimal.value:
-            text = f"Tool will create up to {len(groups)} output file(s), separated by landscape and portrait display orientation."
+        def _open_url(self, payload: dict[str, object]) -> None:
+            url = str(payload.get("url") or "")
+            if url != REPOSITORY_URL:
+                self._send_json({"error": "Unsupported URL"}, HTTPStatus.BAD_REQUEST)
+                return
+            webbrowser.open(url)
+            self._send_json({"ok": True})
+
+        def _scan(self, payload: dict[str, object]) -> None:
+            try:
+                logger = _gui_logger(state)
+                state.set_progress(8)
+                tools = resolve_tools(logger, True, default_tools_dir())
+                input_dir = Path(str(payload["input_dir"]))
+                if not input_dir.is_dir():
+                    raise ValueError(f"Selected path is not a folder: {input_dir}")
+                paths = scan_video_files(
+                    input_dir,
+                    bool(payload.get("recursive", True)),
+                    str(payload.get("sort_by") or "name-natural-asc"),
+                )
+                state.set_progress(25)
+                media_files, failures = probe_files(paths, tools, logger)
+                if failures:
+                    state.log(f"{len(failures)} file(s) could not be analyzed.")
+                files = _serialize_files(media_files)
+                state.set_progress(100)
+                self._send_json({"files": files})
+            except Exception as exc:
+                state.set_progress(0)
+                self._send_json({"error": str(exc)}, HTTPStatus.INTERNAL_SERVER_ERROR)
+
+        def _merge(self, payload: dict[str, object]) -> None:
+            if not state.begin_run(cleanup_temp_on_cancel=not bool(payload.get("keep_temp"))):
+                self._send_json({"error": "A merge is already running."}, HTTPStatus.CONFLICT)
+                return
+            command = _build_merge_command(payload)
+            threading.Thread(target=_run_merge, args=(command, state), daemon=True).start()
+            self._send_json({"command": command})
+
+        def _cancel(self) -> None:
+            if state.cancel_running_process():
+                self._send_json({"ok": True, "message": "Stop requested."})
+            else:
+                self._send_json({"ok": False, "message": "No merge task is running."})
+
+        def _read_json(self) -> dict[str, object]:
+            length = int(self.headers.get("Content-Length", "0"))
+            if length <= 0:
+                return {}
+            raw = self.rfile.read(length)
+            return json.loads(raw.decode("utf-8"))
+
+        def _send_html(self, content: str) -> None:
+            content = content.replace("__APP_VERSION__", __version__).replace("__REPOSITORY_URL__", REPOSITORY_URL)
+            data = content.encode("utf-8")
+            self.send_response(HTTPStatus.OK)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
+        def _send_json(self, payload: dict[str, object], status: HTTPStatus = HTTPStatus.OK) -> None:
+            data = json.dumps(payload).encode("utf-8")
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
+    return Handler
+
+
+def _serialize_files(files: list[VideoFile]) -> list[dict[str, object]]:
+    fast_groups = group_fast(files)
+    output = []
+    for file in files:
+        fast_ready = any(file in members and len(members) > 1 for members in fast_groups.values())
+        output.append(
+            {
+                "path": str(file.path),
+                "name": file.path.name,
+                "display_width": file.display_width,
+                "display_height": file.display_height,
+                "video_codec": file.video_codec,
+                "audio_codec": file.audio_codec,
+                "fps": f"{file.frame_rate_float:.2f}" if file.frame_rate_float else file.frame_rate,
+                "duration": _format_duration(file.duration),
+                "orientation": file.orientation.value,
+                "fast_ready": fast_ready,
+            }
+        )
+    return output
+
+
+def _recommended_gpu_mode(gpu_encoders: list[str]) -> str:
+    available = set(gpu_encoders)
+    system = platform.system()
+    if system == "Darwin" and {"h264_videotoolbox", "hevc_videotoolbox"} & available:
+        return "auto"
+    if system == "Windows":
+        for encoder in ("h264_nvenc", "hevc_nvenc", "h264_qsv", "hevc_qsv", "h264_amf", "hevc_amf"):
+            if encoder in available:
+                return "auto"
+    if system == "Linux":
+        for encoder in ("h264_nvenc", "hevc_nvenc", "h264_qsv", "hevc_qsv"):
+            if encoder in available:
+                return "auto"
+    return "off"
+
+
+def _detect_gui_ffmpeg_encoders(tools) -> set[str]:
+    attempts = (5, 10, 15) if platform.system() == "Darwin" else (5,)
+    encoders: set[str] = set()
+    for timeout in attempts:
+        encoders = detect_ffmpeg_encoders(tools, timeout=timeout)
+        if platform.system() != "Darwin" and encoders:
+            return encoders
+        if any(encoder.endswith("_videotoolbox") for encoder in encoders):
+            return encoders
+        time.sleep(0.35)
+    return encoders
+
+
+def _build_merge_command(payload: dict[str, object]) -> list[str]:
+    if getattr(sys, "frozen", False):
+        cmd = [sys.executable, "merge", str(payload["input_dir"])]
+    else:
+        main_py = Path(__file__).resolve().parents[1] / "main.py"
+        cmd = [sys.executable, str(main_py), "merge", str(payload["input_dir"])]
+    cmd.extend(["--mode", str(payload.get("mode") or MergeMode.optimal.value)])
+    cmd.extend(["--output-format", str(payload.get("output_format") or "mp4")])
+    if payload.get("name"):
+        cmd.extend(["--name", str(payload["name"])])
+    if payload.get("output_dir"):
+        cmd.extend(["--output-dir", str(payload["output_dir"])])
+    if payload.get("sort_by"):
+        cmd.extend(["--sort-by", str(payload["sort_by"])])
+    if payload.get("video_codec"):
+        cmd.extend(["--video-codec", str(payload["video_codec"])])
+    if payload.get("gpu"):
+        cmd.extend(["--gpu", str(payload["gpu"])])
+    if payload.get("audio_codec"):
+        cmd.extend(["--audio-codec", str(payload["audio_codec"])])
+    cmd.extend(["--crf", str(payload.get("crf") or 20)])
+    if payload.get("preset"):
+        cmd.extend(["--preset", str(payload["preset"])])
+    if payload.get("fps_policy"):
+        cmd.extend(["--fps-policy", str(payload["fps_policy"])])
+    if payload.get("resolution_policy"):
+        cmd.extend(["--resolution-policy", str(payload["resolution_policy"])])
+    if payload.get("pad_color"):
+        cmd.extend(["--pad-color", str(payload["pad_color"])])
+    if payload.get("ffmpeg_path"):
+        cmd.extend(["--ffmpeg-path", str(payload["ffmpeg_path"])])
+    if payload.get("ffprobe_path"):
+        cmd.extend(["--ffprobe-path", str(payload["ffprobe_path"])])
+    if payload.get("temp_dir"):
+        cmd.extend(["--temp-dir", str(payload["temp_dir"])])
+    if not payload.get("recursive", True):
+        cmd.append("--no-recursive")
+    if payload.get("overwrite"):
+        cmd.append("--overwrite")
+    if payload.get("dry_run"):
+        cmd.append("--dry-run")
+    if payload.get("keep_temp"):
+        cmd.append("--keep-temp")
+    if not payload.get("auto_download_deps", True):
+        cmd.append("--no-auto-download-deps")
+    return cmd
+
+
+def _run_merge(command: list[str], state: GuiState) -> None:
+    state.log("Command: " + " ".join(command))
+    try:
+        process = subprocess.Popen(
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            **_process_group_kwargs(),
+        )
+        if state.start_process(process):
+            _terminate_process(process)
+        assert process.stdout is not None
+        for line in process.stdout:
+            stripped = line.rstrip()
+            state.log(stripped)
+            temp_match = re.search(r"(?:Preprocessing|Concat) temp directory:\s+(.+)$", stripped)
+            if temp_match:
+                state.record_temp_path(Path(temp_match.group(1).strip()))
+            progress_match = re.search(r"Progress:\s+(\d+)/(\d+)\s+\((\d+)%\)", stripped)
+            if progress_match:
+                state.set_progress(int(progress_match.group(3)))
+        code = process.wait()
+        was_cancelled = state.finish_process()
+        if was_cancelled:
+            state.log("Merge stopped by user.")
+            _cleanup_cancel_temp_dirs(state)
+        elif code == 0:
+            state.set_progress(100)
+            state.log("Merge completed.")
         else:
-            text = "Tool will normalize all files to one display canvas and produce one output file."
-        self.plan_text.configure(text=text)
+            state.log(f"ERROR: Merge failed with exit code {code}.")
+    except Exception as exc:
+        state.log(f"ERROR: {exc}")
+    finally:
+        state.finish_process()
 
-    def _clear_table(self) -> None:
-        for item in self.files_tree.get_children():
-            self.files_tree.delete(item)
 
-    def _set_summary(self, text: str) -> None:
-        self.summary_label.configure(text=text.upper())
+def _cleanup_cancel_temp_dirs(state: GuiState) -> None:
+    cleaned = 0
+    for path in state.consume_cancel_cleanup_paths():
+        if not path.name.startswith(("videomerge_preprocess_", "videomerge_concat_")):
+            state.log(f"Skipped unsafe temp cleanup path: {path}")
+            continue
+        try:
+            if path.exists():
+                shutil.rmtree(path)
+                cleaned += 1
+        except Exception as exc:
+            state.log(f"WARNING: Temporary cleanup failed: {path} | {exc}")
+    state.log(f"Temporary files cleaned after stop: {cleaned} folder(s).")
 
-    def _set_ffmpeg_status(self, text: str, state: str) -> None:
-        color = COLORS["green"] if state == "ok" else COLORS["yellow"]
-        self.ffmpeg_badge.configure(text=f"✓ {text}" if state == "ok" else f"! {text}", fg=color)
 
-    def _set_progress(self, value: int) -> None:
-        value = max(0, min(value, 100))
-        self.progress.configure(value=value)
-        self.progress_label.configure(text=f"{value}%")
+def _terminate_process(process: subprocess.Popen[str]) -> None:
+    try:
+        if os.name == "nt":
+            subprocess.run(
+                ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=False,
+                **subprocess_window_kwargs(),
+            )
+        else:
+            os.killpg(process.pid, signal.SIGTERM)
+        try:
+            process.wait(timeout=3)
+        except subprocess.TimeoutExpired:
+            if os.name == "nt":
+                process.kill()
+            else:
+                os.killpg(process.pid, signal.SIGKILL)
+    except Exception:
+        try:
+            process.kill()
+        except Exception:
+            pass
 
-    def _log(self, message: str) -> None:
-        stamp = time.strftime("%H:%M:%S")
-        self.console.insert(tk.END, f"[{stamp}] {message}\n")
-        self.console.see(tk.END)
 
-    def _queue_logger(self) -> logging.Logger:
-        logger = logging.getLogger(f"videomerge.gui.{id(self)}")
-        logger.handlers.clear()
-        logger.setLevel(logging.INFO)
-        logger.propagate = False
-        handler = QueueLogHandler(self.events)
-        handler.setFormatter(logging.Formatter("%(levelname)s: %(message)s"))
-        logger.addHandler(handler)
-        return logger
+def _process_group_kwargs() -> dict[str, object]:
+    if os.name == "nt":
+        return {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP | getattr(subprocess, "CREATE_NO_WINDOW", 0)}
+    return {"start_new_session": True}
+
+
+def _gui_logger(state: GuiState) -> logging.Logger:
+    logger = logging.getLogger(f"videomerge.webgui.{id(state)}")
+    logger.handlers.clear()
+    logger.setLevel(logging.INFO)
+    logger.propagate = False
+    handler = QueueLogHandler(state)
+    handler.setFormatter(logging.Formatter("%(levelname)s: %(message)s"))
+    logger.addHandler(handler)
+    return logger
+
+
+def _pick_folder(kind: str) -> str:
+    titles = {
+        "output": "Select output folder",
+        "temp": "Select temp folder",
+        "source": "Select source video folder",
+    }
+    title = titles.get(kind, "Select folder")
+    if platform.system() == "Darwin":
+        return _pick_folder_macos(title)
+    if platform.system() == "Windows":
+        selected = _pick_folder_windows(title)
+        if selected is None:
+            return _pick_folder_tk(title)
+        return selected
+    return _pick_folder_tk(title)
+
+
+def _pick_folder_macos(title: str) -> str:
+    script = 'POSIX path of (choose folder with prompt "{}")'.format(title)
+    try:
+        result = subprocess.run(
+            ["osascript", "-e", script],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            **subprocess_window_kwargs(),
+        )
+        if result.returncode == 0:
+            return result.stdout.strip()
+    except Exception:
+        return ""
+    return ""
+
+
+def _pick_folder_windows(title: str) -> str | None:
+    escaped_title = title.replace("'", "''")
+    script = r"""
+Add-Type -AssemblyName System.Windows.Forms
+[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new()
+
+$dialog = New-Object System.Windows.Forms.OpenFileDialog
+$dialog.Title = '__TITLE__'
+$dialog.CheckFileExists = $false
+$dialog.ValidateNames = $false
+$dialog.DereferenceLinks = $true
+$dialog.AutoUpgradeEnabled = $true
+$dialog.Filter = 'All files (*.*)|*.*'
+$dialog.FileName = 'Select this folder'
+$initial = [Environment]::GetFolderPath('MyVideos')
+if (-not $initial -or -not (Test-Path -LiteralPath $initial -PathType Container)) {
+  $initial = [Environment]::GetFolderPath('UserProfile')
+}
+if ($initial -and (Test-Path -LiteralPath $initial -PathType Container)) {
+  $dialog.InitialDirectory = $initial
+}
+if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
+  $selected = $dialog.FileName
+  if (Test-Path -LiteralPath $selected -PathType Container) {
+    Write-Output $selected
+  } else {
+    Write-Output (Split-Path -Parent $selected)
+  }
+}
+""".replace("__TITLE__", escaped_title)
+    try:
+        result = subprocess.run(
+            ["powershell", "-NoProfile", "-STA", "-ExecutionPolicy", "Bypass", "-Command", script],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            **subprocess_window_kwargs(),
+        )
+        if result.returncode == 0:
+            return _normalize_picked_folder(result.stdout.strip())
+    except Exception:
+        return None
+    return None
+
+
+def _normalize_picked_folder(path_text: str) -> str:
+    path_text = path_text.strip().strip('"')
+    if not path_text:
+        return ""
+    path = Path(path_text)
+    if path.name == "Select this folder":
+        return str(path.parent)
+    if path.exists() and path.is_file():
+        return str(path.parent)
+    return str(path)
+
+
+def _default_display_paths(input_dir: str = "") -> dict[str, str]:
+    defaults = {
+        "output_dir": "",
+        "temp_dir": tempfile.gettempdir(),
+        "ffmpeg": "",
+        "ffprobe": "",
+    }
+    if input_dir:
+        candidate = Path(input_dir)
+        if candidate.is_dir():
+            defaults["output_dir"] = str(candidate / "merged")
+
+    logger = logging.getLogger("videomerge.gui.defaults")
+    logger.handlers.clear()
+    logger.addHandler(logging.NullHandler())
+    logger.propagate = False
+    try:
+        tools = resolve_tools(logger, False, default_tools_dir())
+        defaults["ffmpeg"] = str(tools.ffmpeg)
+        defaults["ffprobe"] = str(tools.ffprobe)
+    except Exception:
+        pass
+    return defaults
+
+
+def _config_dir() -> Path:
+    frozen_dir = _frozen_writable_config_dir()
+    if frozen_dir:
+        return frozen_dir
+
+    system = platform.system()
+    if system == "Darwin":
+        return Path.home() / "Library" / "Application Support" / "VideoMergingTool"
+    if system == "Windows":
+        root = os.environ.get("APPDATA") or os.environ.get("LOCALAPPDATA")
+        return Path(root) / "VideoMergingTool" if root else Path.home() / "AppData" / "Roaming" / "VideoMergingTool"
+    return Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "VideoMergingTool"
+
+
+def _frozen_writable_config_dir() -> Path | None:
+    if not getattr(sys, "frozen", False):
+        return None
+    if platform.system() == "Darwin":
+        return None
+
+    candidate = Path(sys.executable).resolve().parent / "config"
+    try:
+        candidate.mkdir(parents=True, exist_ok=True)
+        probe = candidate / ".write-test"
+        probe.write_text("ok", encoding="utf-8")
+        probe.unlink(missing_ok=True)
+        return candidate
+    except OSError:
+        return None
+
+
+def _config_path() -> Path:
+    return _config_dir() / "config.json"
+
+
+def _load_gui_config() -> dict[str, object]:
+    path = _config_path()
+    if not path.exists():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _save_gui_config(payload: dict[str, object]) -> None:
+    allowed = set(CONFIG_FIELD_IDS) | {"lang", "mode"}
+    clean = {key: value for key, value in payload.items() if key in allowed}
+    path = _config_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(clean, indent=2, ensure_ascii=False), encoding="utf-8")
+
+
+def _pick_folder_tk(title: str) -> str:
+    try:
+        import tkinter as tk
+        from tkinter import filedialog
+
+        root = tk.Tk()
+        root.withdraw()
+        root.attributes("-topmost", True)
+        root.update()
+        selected = filedialog.askdirectory(title=title, mustexist=True, parent=root)
+        root.destroy()
+        return selected or ""
+    except Exception:
+        return ""
+
+
+def _free_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        return int(sock.getsockname()[1])
 
 
 def _format_duration(seconds: float) -> str:
@@ -627,11 +1645,3 @@ def _format_duration(seconds: float) -> str:
     if hours:
         return f"{hours}:{minutes:02d}:{sec:02d}"
     return f"{minutes}:{sec:02d}"
-
-
-def launch_gui() -> None:
-    try:
-        app = VideoMergeGUI()
-        app.run()
-    except tk.TclError as exc:
-        raise RuntimeError(f"Could not start GUI: {exc}") from exc

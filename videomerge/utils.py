@@ -1,12 +1,19 @@
 from __future__ import annotations
 
 import logging
+import os
 import shlex
 import subprocess
 from pathlib import Path
 from typing import Iterable, Sequence
 
 from .errors import CommandError
+
+
+def subprocess_window_kwargs() -> dict[str, int]:
+    if os.name != "nt":
+        return {}
+    return {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)}
 
 
 def run_command(args: Sequence[str | Path], logger: logging.Logger, dry_run: bool = False) -> None:
@@ -23,6 +30,7 @@ def run_command(args: Sequence[str | Path], logger: logging.Logger, dry_run: boo
         text=True,
         encoding="utf-8",
         errors="replace",
+        **subprocess_window_kwargs(),
     )
     if process.returncode != 0:
         if process.stdout.strip():
