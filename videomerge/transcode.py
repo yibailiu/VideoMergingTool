@@ -127,7 +127,7 @@ def preprocess_file(
             "-c:v",
             codec_plan.output_video_encoder,
             *gpu_encoder_quality_args(
-                codec_plan.output_video_encoder if gpu_plan and gpu_plan.enabled else None,
+                codec_plan.output_video_encoder,
                 crf,
                 preset,
                 canvas.width,

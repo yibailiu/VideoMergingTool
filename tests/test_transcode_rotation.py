@@ -67,6 +67,7 @@ class TranscodeRotationTests(unittest.TestCase):
         self.assertEqual(captured_args[captured_args.index("-display_rotation:v:0") + 1], "0")
         self.assertIn("transpose=2", captured_args[captured_args.index("-vf") + 1])
         self.assertEqual(captured_args[captured_args.index("-metadata:s:v:0") + 1], "rotate=0")
+        self.assertIn("-crf", captured_args)
 
     def test_validation_requires_canvas_display_size_and_zero_rotation(self) -> None:
         source = _rotated_video()

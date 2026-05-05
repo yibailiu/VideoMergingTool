@@ -87,7 +87,7 @@ Most users can use the desktop controls without typing any command. The table be
 | Temp Folder | `--temp-dir PATH` | Where temporary processing files are stored. Choose a fast disk with enough free space for large batches. |
 | Dry Run | `--dry-run` | Shows the planned work without actually running FFmpeg. |
 | GPU Acceleration | `--gpu off\|auto\|nvenc\|qsv\|amf\|videotoolbox` | Uses hardware encoding when available. `auto` is convenient; `off` is safest for compatibility. |
-| Target Video Codec | `--video-codec TEXT` | Overrides the output video codec. Leave default unless you know which codec you need. |
+| Target Video Codec | `--video-codec TEXT` | Overrides the output video codec. Leave default for H.264, or VP9 when output format is WebM. |
 | Target Audio Codec | `--audio-codec TEXT` | Overrides the output audio codec. Leave default unless your playback device requires a specific codec. |
 | Quality | `--crf 0-51` | Controls transcode quality. Lower values usually mean better quality and larger files. Default is `20`. |
 | Encoder Preset | `--preset TEXT` | Controls encoding speed and compression. `medium` is the default balance. |

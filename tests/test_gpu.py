@@ -28,6 +28,18 @@ class GpuTests(unittest.TestCase):
         self.assertNotIn("-crf", args)
         self.assertIn("p7", args)
 
+    def test_cpu_h264_quality_args_use_crf(self) -> None:
+        args = gpu_encoder_quality_args("libx264", 18, "slow")
+
+        self.assertEqual(args, ["-crf", "18", "-preset", "slow"])
+
+    def test_mpeg4_quality_args_use_qscale_not_crf(self) -> None:
+        args = gpu_encoder_quality_args("mpeg4", 10, "medium")
+
+        self.assertIn("-q:v", args)
+        self.assertNotIn("-crf", args)
+        self.assertLess(int(args[args.index("-q:v") + 1]), 10)
+
     def test_macos_auto_uses_videotoolbox(self) -> None:
         tools = ToolPaths(ffmpeg=Path("ffmpeg"), ffprobe=Path("ffprobe"))
         with patch("videomerge.gpu.platform.system", return_value="Darwin"), patch(
