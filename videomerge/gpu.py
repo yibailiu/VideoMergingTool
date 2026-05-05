@@ -131,6 +131,8 @@ def gpu_encoder_quality_args(
         if encoder == "h264_videotoolbox":
             args.extend(["-profile:v", "high"])
         return args
+    if encoder == "mpeg4":
+        return ["-q:v", str(_mpeg4_quality(crf))]
     return ["-crf", str(crf), "-preset", preset]
 
 
@@ -186,3 +188,7 @@ def _videotoolbox_bitrate(crf: int, width: int | None, height: int | None, fps: 
     quality_factor = max(0.45, min(2.2, (28 - crf) / 10 + 1.0))
     bitrate = int(megapixels_per_second * 220 * quality_factor)
     return max(900, min(60_000, bitrate))
+
+
+def _mpeg4_quality(crf: int) -> int:
+    return max(1, min(31, round((max(0, min(51, crf)) / 51) * 30 + 1)))

@@ -42,9 +42,10 @@ def majority_codec_plan(
     files: Iterable[VideoFile],
     requested_video_codec: str | None,
     requested_audio_codec: str | None,
+    default_video_codec: str = "h264",
 ) -> CodecPlan:
     file_list = list(files)
-    video_codec = requested_video_codec or _most_common([file.video_codec for file in file_list], "h264")
+    video_codec = requested_video_codec or default_video_codec
     audio_codec = requested_audio_codec or _most_common(
         [file.audio_codec for file in file_list if file.audio_codec],
         "aac",

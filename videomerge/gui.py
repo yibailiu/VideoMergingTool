@@ -508,7 +508,7 @@ HTML = r"""<!doctype html>
             <option value="size-desc" data-i18n="sortSizeDesc">File size (largest first)</option>
           </select>
           <div class="field-label label-micro"><span data-i18n="targetVideoCodec">Target Video Codec</span> <span class="info" data-tip-i18n="tipVideoCodec">i</span></div>
-          <select id="codec"><option value="">Auto majority</option><option>h264</option><option>hevc</option><option>vp9</option><option>av1</option><option>mpeg4</option></select>
+          <select id="codec"><option value="">Auto H.264</option><option>h264</option><option>hevc</option><option>vp9</option><option>av1</option><option>mpeg4</option></select>
           <div class="field-label label-micro"><span data-i18n="gpuAcceleration">GPU Acceleration</span> <span class="info" data-tip-i18n="tipGpu">i</span></div>
           <select id="gpu"><option value="off">off</option><option value="auto">auto</option><option value="nvenc">nvenc</option><option value="qsv">qsv</option><option value="amf">amf</option><option value="videotoolbox">videotoolbox (macOS)</option></select>
           <div class="field-label label-micro"><span data-i18n="targetAudioCodec">Target Audio Codec</span> <span class="info" data-tip-i18n="tipAudioCodec">i</span></div>
@@ -568,7 +568,7 @@ HTML = r"""<!doctype html>
         tipTempDir: "Maps to --temp-dir. Leave empty to use the system default temp directory.",
         tipOutputFormat: "Maps to --output-format. Supported containers: mp4, mkv, mov, avi, ts, webm.",
         tipSortOrder: "Maps to --sort-by. Controls the scan, preview, preprocessing, and final merge order.",
-        tipVideoCodec: "Maps to --video-codec. Leave empty for automatic codec selection.",
+        tipVideoCodec: "Maps to --video-codec. Leave empty for H.264 by default, or VP9 for webm.",
         tipGpu: "Maps to --gpu. auto chooses the native encoder when available and falls back to CPU when needed.",
         tipAudioCodec: "Maps to --audio-codec. Leave empty to use majority vote, defaulting to AAC when needed.",
         tipCrf: "Maps to --crf. Lower means better quality and larger files.",
@@ -610,7 +610,7 @@ HTML = r"""<!doctype html>
         tipTempDir: "对应 --temp-dir。留空时使用系统默认临时目录。",
         tipOutputFormat: "对应 --output-format。支持 mp4、mkv、mov、avi、ts、webm。",
         tipSortOrder: "对应 --sort-by。控制扫描、预览、预处理和最终合并顺序。",
-        tipVideoCodec: "对应 --video-codec。留空时自动选择编码。",
+        tipVideoCodec: "对应 --video-codec。留空时默认使用 H.264，webm 输出默认 VP9。",
         tipGpu: "对应 --gpu。auto 会优先选择可用的系统原生编码器，必要时回退 CPU。",
         tipAudioCodec: "对应 --audio-codec。留空时按多数文件选择，需要时默认 AAC。",
         tipCrf: "对应 --crf。数值越低质量越高，文件越大。",

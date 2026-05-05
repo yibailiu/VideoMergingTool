@@ -299,13 +299,18 @@ def _run_optimal(
 ) -> list[MergeResult]:
     logger.info("Mode: optimal. Files will be split into landscape and portrait outputs.")
     codec_plan = _container_adjusted_plan(
-        majority_codec_plan(media_files, video_codec, audio_codec),
+        majority_codec_plan(
+            media_files,
+            video_codec,
+            audio_codec,
+            default_video_codec=_default_transcode_video_codec(output_format),
+        ),
         output_format,
         logger,
     )
     gpu_plan = resolve_gpu_plan(tools, gpu, codec_plan.video_codec, logger)
     codec_plan = apply_gpu_encoder(codec_plan, gpu_plan)
-    logger.info("Target codecs by file-count majority: video=%s audio=%s", codec_plan.video_codec, codec_plan.audio_codec)
+    logger.info("Target codecs: video=%s audio=%s", codec_plan.video_codec, codec_plan.audio_codec)
     groups = split_by_orientation(media_files)
     results: list[MergeResult] = []
     temp_owners = []
@@ -370,7 +375,12 @@ def _run_extreme(
 ) -> list[MergeResult]:
     logger.info("Mode: extreme. All files will be normalized into one output.")
     codec_plan = _container_adjusted_plan(
-        majority_codec_plan(media_files, video_codec, audio_codec),
+        majority_codec_plan(
+            media_files,
+            video_codec,
+            audio_codec,
+            default_video_codec=_default_transcode_video_codec(output_format),
+        ),
         output_format,
         logger,
     )
@@ -428,6 +438,12 @@ def _container_adjusted_plan(plan: CodecPlan, output_format: str, logger: loggin
             audio_encoder = plan.output_audio_encoder
         return CodecPlan(video_codec, audio_codec, video_encoder, audio_encoder)
     return plan
+
+
+def _default_transcode_video_codec(output_format: str) -> str:
+    if output_format == "webm":
+        return "vp9"
+    return "h264"
 
 
 def _cleanup_temp_owners(owners: list[object], logger: logging.Logger) -> None:

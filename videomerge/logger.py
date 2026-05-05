@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import io
 import logging
 import sys
 from pathlib import Path
@@ -11,7 +12,7 @@ def setup_logging(log_file: Path | None = None, verbose: bool = False) -> loggin
     logger.setLevel(logging.DEBUG)
     logger.propagate = False
 
-    console = logging.StreamHandler(sys.stdout)
+    console = logging.StreamHandler(_safe_stdout())
     console.setLevel(logging.DEBUG if verbose else logging.INFO)
     console.setFormatter(logging.Formatter("%(levelname)s: %(message)s"))
     logger.addHandler(console)
@@ -26,3 +27,11 @@ def setup_logging(log_file: Path | None = None, verbose: bool = False) -> loggin
         logger.addHandler(file_handler)
 
     return logger
+
+
+def _safe_stdout():
+    if getattr(sys.stdout, "encoding", None) and sys.stdout.encoding.lower() == "utf-8":
+        return sys.stdout
+    if not hasattr(sys.stdout, "buffer"):
+        return sys.stdout
+    return io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace", line_buffering=True)

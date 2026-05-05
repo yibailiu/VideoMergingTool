@@ -87,7 +87,7 @@ Windows 和 macOS 安装包已经内置 FFmpeg / FFprobe，普通用户不需要
 | Temp Folder / 临时目录 | `--temp-dir PATH` | 存放临时处理文件的位置。大批量合并时建议选择空间充足的高速磁盘。 |
 | Dry Run / 试运行 | `--dry-run` | 只显示计划执行的操作，不真正调用 FFmpeg。 |
 | GPU Acceleration / GPU 加速 | `--gpu off\|auto\|nvenc\|qsv\|amf\|videotoolbox` | 可用时使用硬件编码。`auto` 更方便，`off` 兼容性最好。 |
-| Target Video Codec / 目标视频编码 | `--video-codec TEXT` | 指定输出视频编码。普通用户建议保持默认。 |
+| Target Video Codec / 目标视频编码 | `--video-codec TEXT` | 指定输出视频编码。默认使用 H.264，WebM 输出默认 VP9。 |
 | Target Audio Codec / 目标音频编码 | `--audio-codec TEXT` | 指定输出音频编码。普通用户建议保持默认。 |
 | Quality / 质量 | `--crf 0-51` | 控制转码质量。数值越低通常质量越高、文件越大。默认值是 `20`。 |
 | Encoder Preset / 编码预设 | `--preset TEXT` | 控制编码速度和压缩效率。默认 `medium` 兼顾速度和体积。 |
