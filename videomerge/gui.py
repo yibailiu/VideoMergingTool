@@ -1693,43 +1693,156 @@ def _show_macos_notification_with_usernotifications(title: str, body: str, sound
 
 
 def _show_windows_notification(title: str, body: str, sound: bool) -> tuple[bool, str]:
-    script = _windows_notification_script(title, body, sound)
-    subprocess.Popen(
-        ["powershell", "-NoProfile", "-STA", "-ExecutionPolicy", "Bypass", "-Command", script],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        **subprocess_window_kwargs(),
-    )
-    return True, "Windows notification requested."
+    if os.name != "nt":
+        return False, "Windows notifications require Windows."
+    thread = threading.Thread(target=_show_windows_notification_native, args=(title, body, sound), daemon=True)
+    thread.start()
+    return True, "Windows notification requested by VideoMergingTool."
 
 
-def _windows_notification_script(title: str, body: str, sound: bool) -> str:
-    title_ps = _powershell_single_quote(title)
-    body_ps = _powershell_single_quote(body)
-    sound_ps = "$true" if sound else "$false"
-    return f"""
-$ErrorActionPreference = 'Stop'
-try {{
-  Add-Type -AssemblyName System.Windows.Forms
-  Add-Type -AssemblyName System.Drawing
-  $notify = New-Object System.Windows.Forms.NotifyIcon
-  $notify.Icon = [System.Drawing.SystemIcons]::Information
-  $notify.BalloonTipTitle = {title_ps}
-  $notify.BalloonTipText = {body_ps}
-  $notify.Visible = $true
-  if ({sound_ps}) {{ [System.Media.SystemSounds]::Asterisk.Play() }}
-  $notify.ShowBalloonTip(5000)
-  [System.Windows.Forms.Application]::DoEvents()
-  Start-Sleep -Seconds 6
-  $notify.Dispose()
-}} catch {{
-  if ({sound_ps}) {{ [System.Media.SystemSounds]::Asterisk.Play() }}
-}}
-"""
+def _show_windows_notification_native(title: str, body: str, sound: bool) -> None:
+    import ctypes
+    from ctypes import wintypes
+
+    user32 = ctypes.windll.user32
+    shell32 = ctypes.windll.shell32
+    kernel32 = ctypes.windll.kernel32
+
+    WM_DESTROY = 0x0002
+    WM_TIMER = 0x0113
+    WM_USER = 0x0400
+    WM_APP_NOTIFY = WM_USER + 20
+    WM_LBUTTONUP = 0x0202
+    WM_LBUTTONDBLCLK = 0x0203
+    NIN_BALLOONUSERCLICK = WM_USER + 5
+    NIF_MESSAGE = 0x00000001
+    NIF_ICON = 0x00000002
+    NIF_TIP = 0x00000004
+    NIF_INFO = 0x00000010
+    NIM_ADD = 0x00000000
+    NIM_DELETE = 0x00000002
+    NIIF_INFO = 0x00000001
+    NIIF_NOSOUND = 0x00000010
+    IDI_INFORMATION = 32516
+
+    class WNDCLASSW(ctypes.Structure):
+        _fields_ = [
+            ("style", wintypes.UINT),
+            ("lpfnWndProc", ctypes.WINFUNCTYPE(wintypes.LPARAM, wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM)),
+            ("cbClsExtra", ctypes.c_int),
+            ("cbWndExtra", ctypes.c_int),
+            ("hInstance", wintypes.HINSTANCE),
+            ("hIcon", wintypes.HICON),
+            ("hCursor", wintypes.HCURSOR),
+            ("hbrBackground", wintypes.HBRUSH),
+            ("lpszMenuName", wintypes.LPCWSTR),
+            ("lpszClassName", wintypes.LPCWSTR),
+        ]
+
+    class NOTIFYICONDATAW(ctypes.Structure):
+        _fields_ = [
+            ("cbSize", wintypes.DWORD),
+            ("hWnd", wintypes.HWND),
+            ("uID", wintypes.UINT),
+            ("uFlags", wintypes.UINT),
+            ("uCallbackMessage", wintypes.UINT),
+            ("hIcon", wintypes.HICON),
+            ("szTip", wintypes.WCHAR * 128),
+            ("dwState", wintypes.DWORD),
+            ("dwStateMask", wintypes.DWORD),
+            ("szInfo", wintypes.WCHAR * 256),
+            ("uTimeoutOrVersion", wintypes.UINT),
+            ("szInfoTitle", wintypes.WCHAR * 64),
+            ("dwInfoFlags", wintypes.DWORD),
+        ]
+
+    notify_data = NOTIFYICONDATAW()
+
+    def wnd_proc(hwnd, msg, wparam, lparam):  # type: ignore[no-untyped-def]
+        if msg == WM_APP_NOTIFY and lparam in (WM_LBUTTONUP, WM_LBUTTONDBLCLK, NIN_BALLOONUSERCLICK):
+            _focus_windows_app_window()
+            user32.DestroyWindow(hwnd)
+            return 0
+        if msg == WM_TIMER:
+            user32.DestroyWindow(hwnd)
+            return 0
+        if msg == WM_DESTROY:
+            shell32.Shell_NotifyIconW(NIM_DELETE, ctypes.byref(notify_data))
+            user32.PostQuitMessage(0)
+            return 0
+        return user32.DefWindowProcW(hwnd, msg, wparam, lparam)
+
+    wnd_proc_ref = ctypes.WINFUNCTYPE(wintypes.LPARAM, wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM)(wnd_proc)
+    hinstance = kernel32.GetModuleHandleW(None)
+    class_name = f"VideoMergingToolNotification{os.getpid()}{int(time.time() * 1000)}"
+    wnd_class = WNDCLASSW()
+    wnd_class.lpfnWndProc = wnd_proc_ref
+    wnd_class.hInstance = hinstance
+    wnd_class.lpszClassName = class_name
+    user32.RegisterClassW(ctypes.byref(wnd_class))
+    hwnd = user32.CreateWindowExW(0, class_name, "VideoMergingTool Notification", 0, 0, 0, 0, 0, None, None, hinstance, None)
+    if not hwnd:
+        if sound:
+            user32.MessageBeep(0xFFFFFFFF)
+        return
+
+    notify_data.cbSize = ctypes.sizeof(NOTIFYICONDATAW)
+    notify_data.hWnd = hwnd
+    notify_data.uID = 1
+    notify_data.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP | NIF_INFO
+    notify_data.uCallbackMessage = WM_APP_NOTIFY
+    notify_data.hIcon = user32.LoadIconW(None, IDI_INFORMATION)
+    notify_data.szTip = "VideoMergingTool"
+    notify_data.szInfoTitle = title[:63]
+    notify_data.szInfo = body[:255]
+    notify_data.uTimeoutOrVersion = 5000
+    notify_data.dwInfoFlags = NIIF_INFO if sound else NIIF_INFO | NIIF_NOSOUND
+    shell32.Shell_NotifyIconW(NIM_ADD, ctypes.byref(notify_data))
+    if sound:
+        user32.MessageBeep(0xFFFFFFFF)
+    user32.SetTimer(hwnd, 1, 7000, None)
+
+    message = wintypes.MSG()
+    while user32.GetMessageW(ctypes.byref(message), None, 0, 0) > 0:
+        user32.TranslateMessage(ctypes.byref(message))
+        user32.DispatchMessageW(ctypes.byref(message))
 
 
-def _powershell_single_quote(value: str) -> str:
-    return "'" + value.replace("'", "''") + "'"
+def _focus_windows_app_window() -> bool:
+    if os.name != "nt":
+        return False
+    import ctypes
+    from ctypes import wintypes
+
+    user32 = ctypes.windll.user32
+    current_pid = os.getpid()
+    found = {"hwnd": None}
+
+    def enum_proc(hwnd, lparam):  # type: ignore[no-untyped-def]
+        if not user32.IsWindowVisible(hwnd):
+            return True
+        pid = wintypes.DWORD()
+        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+        if pid.value != current_pid:
+            return True
+        length = user32.GetWindowTextLengthW(hwnd)
+        if length <= 0:
+            return True
+        buffer = ctypes.create_unicode_buffer(length + 1)
+        user32.GetWindowTextW(hwnd, buffer, length + 1)
+        if "VideoMergingTool" in buffer.value:
+            found["hwnd"] = hwnd
+            return False
+        return True
+
+    enum_proc_ref = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)(enum_proc)
+    user32.EnumWindows(enum_proc_ref, 0)
+    hwnd = found["hwnd"]
+    if not hwnd:
+        return False
+    user32.ShowWindow(hwnd, 9)
+    user32.SetForegroundWindow(hwnd)
+    return True
 
 
 def _build_merge_command(payload: dict[str, object]) -> list[str]:
