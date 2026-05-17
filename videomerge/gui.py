@@ -53,6 +53,8 @@ CONFIG_FIELD_IDS = [
     "dryRun",
     "keepTemp",
     "autoDownloadDeps",
+    "notifyOnComplete",
+    "playSoundOnComplete",
 ]
 
 
@@ -181,7 +183,7 @@ HTML = r"""<!doctype html>
       font-weight: 800;
     }
     .summary { margin-top: 8px; }
-    .toolbar { display: flex; gap: 8px; align-items: center; }
+    .toolbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
     button {
       font: inherit;
       cursor: pointer;
@@ -194,6 +196,13 @@ HTML = r"""<!doctype html>
     }
     button:hover { background: var(--bg-panel-hover); border-color: var(--border-focus); }
     button:active { transform: scale(.98); }
+    button:disabled {
+      cursor: not-allowed;
+      opacity: .45;
+      transform: none;
+    }
+    button:disabled:hover { background: var(--bg-body); border-color: var(--border-subtle); }
+    .btn-primary:disabled:hover { background: var(--text-primary); border-color: transparent; }
     .btn-icon { border-radius: var(--radius-input); padding: 8px 10px; color: var(--text-secondary); }
     .btn-primary {
       width: 100%;
@@ -210,6 +219,7 @@ HTML = r"""<!doctype html>
     }
     .table-wrap {
       margin: clamp(12px, 2vw, 24px);
+      margin-top: 8px;
       margin-bottom: 12px;
       border: 1px solid var(--border-subtle);
       border-radius: var(--radius-panel);
@@ -217,7 +227,31 @@ HTML = r"""<!doctype html>
       background: var(--bg-panel);
       min-height: 0;
     }
-    table { width: 100%; min-width: 760px; border-collapse: collapse; table-layout: fixed; }
+    .source-table-section {
+      min-height: 0;
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr);
+      overflow: hidden;
+    }
+    .table-toolbar {
+      margin: 10px clamp(12px, 2vw, 24px) 0;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      min-height: 28px;
+    }
+    .selection-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+    .selection-actions button {
+      padding: 5px 10px;
+      font-size: 12px;
+      color: var(--text-secondary);
+    }
+    .selection-count {
+      color: var(--text-muted);
+      white-space: nowrap;
+    }
+    table { width: 100%; min-width: 840px; border-collapse: collapse; table-layout: fixed; }
     th {
       position: sticky;
       top: 0;
@@ -250,6 +284,25 @@ HTML = r"""<!doctype html>
     }
     .status-ok { color: var(--accent-green); }
     .status-warn { color: var(--accent-yellow); }
+    .select-cell, .select-head {
+      text-align: center;
+      padding-left: 10px;
+      padding-right: 10px;
+    }
+    .file-checkbox {
+      width: 18px;
+      height: 18px;
+      flex-basis: 18px;
+      margin: 0 auto;
+      vertical-align: middle;
+    }
+    .file-checkbox::after {
+      width: 10px;
+      height: 10px;
+      top: 3px;
+      left: 3px;
+    }
+    .file-checkbox:checked::after { left: 3px; }
     .console {
       margin: 0 clamp(12px, 2vw, 24px) 12px;
       background: #0A0A0A;
@@ -350,6 +403,20 @@ HTML = r"""<!doctype html>
     }
     input[type="checkbox"]:checked { background: rgba(94,156,96,.22); border-color: var(--accent-green); }
     input[type="checkbox"]:checked::after { left: 18px; background: var(--accent-green); }
+    input.file-checkbox {
+      width: 18px;
+      height: 18px;
+      flex: 0 0 18px;
+      margin: 0 auto;
+      display: block;
+    }
+    input.file-checkbox::after {
+      width: 10px;
+      height: 10px;
+      top: 3px;
+      left: 3px;
+    }
+    input.file-checkbox:checked::after { left: 3px; }
     .folder-row { display: grid; grid-template-columns: 1fr auto; gap: 8px; }
     .hint { color: var(--text-muted); font-size: 12px; margin-top: 6px; line-height: 1.4; }
     .num-row { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
@@ -410,6 +477,25 @@ HTML = r"""<!doctype html>
       font-size: 12px;
       font-weight: 700;
     }
+    .toast {
+      position: fixed;
+      right: 20px;
+      bottom: 20px;
+      z-index: 20;
+      max-width: min(360px, calc(100vw - 40px));
+      background: #0A0A0A;
+      color: var(--text-primary);
+      border: 1px solid var(--border-subtle);
+      border-left: 3px solid var(--accent-green);
+      border-radius: var(--radius-panel);
+      padding: 12px 14px;
+      box-shadow: 0 12px 32px rgba(0,0,0,.4);
+      display: none;
+      line-height: 1.45;
+    }
+    .toast.error { border-left-color: var(--accent-red); }
+    .toast-title { font-weight: 800; margin-bottom: 4px; }
+    .toast-body { color: var(--text-secondary); font-size: 13px; }
     @media (max-width: 1040px) {
       body { min-width: 720px; overflow: auto; }
       .main { grid-template-columns: 1fr; height: auto; min-height: calc(100vh - 56px); }
@@ -447,23 +533,33 @@ HTML = r"""<!doctype html>
           <button class="btn-icon" id="refresh" title="Refresh">↻</button>
         </div>
       </div>
-      <div class="table-wrap">
-        <table>
-          <colgroup>
-            <col style="width: 34%">
-            <col style="width: 15%">
-            <col style="width: 15%">
-            <col style="width: 12%">
-            <col style="width: 10%">
-            <col style="width: 14%">
-          </colgroup>
-          <thead>
-            <tr>
-              <th data-i18n="filename">Filename</th><th data-i18n="resolution">Resolution</th><th data-i18n="codec">Codec</th><th>FPS</th><th data-i18n="duration">Dur</th><th data-i18n="status">Status</th>
-            </tr>
-          </thead>
-          <tbody id="fileRows"></tbody>
-        </table>
+      <div class="source-table-section">
+        <div class="table-toolbar">
+          <div class="selection-actions">
+            <button id="selectAllFiles" type="button" data-i18n="selectAllFiles">Select All</button>
+            <button id="clearFileSelection" type="button" data-i18n="clearFileSelection">Clear Selection</button>
+          </div>
+          <div class="label-micro selection-count" id="selectionCount"></div>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <colgroup>
+              <col style="width: 46px">
+              <col style="width: 32%">
+              <col style="width: 14%">
+              <col style="width: 15%">
+              <col style="width: 11%">
+              <col style="width: 10%">
+              <col style="width: 14%">
+            </colgroup>
+            <thead>
+              <tr>
+                <th class="select-head"></th><th data-i18n="filename">Filename</th><th data-i18n="resolution">Resolution</th><th data-i18n="codec">Codec</th><th>FPS</th><th data-i18n="duration">Dur</th><th data-i18n="status">Status</th>
+              </tr>
+            </thead>
+            <tbody id="fileRows"></tbody>
+          </table>
+        </div>
       </div>
       <div class="console">
         <div class="console-head"><span class="label-micro" data-i18n="processConsole">Process Console</span><span class="label-micro" id="progressText">0%</span></div>
@@ -534,12 +630,15 @@ HTML = r"""<!doctype html>
           <div class="toggle"><div class="toggle-text"><span class="toggle-title"><span data-i18n="dryRun">Dry Run</span> <span class="info" data-tip-i18n="tipDryRun">i</span></span></div><input id="dryRun" type="checkbox"></div>
           <div class="toggle"><div class="toggle-text"><span class="toggle-title"><span data-i18n="keepTempFiles">Keep Temp Files</span> <span class="info" data-tip-i18n="tipKeepTemp">i</span></span></div><input id="keepTemp" type="checkbox"></div>
           <div class="toggle"><div class="toggle-text"><span class="toggle-title"><span data-i18n="autoDownloadDeps">Auto Download Deps</span> <span class="info" data-tip-i18n="tipAutoDownload">i</span></span></div><input id="autoDownloadDeps" type="checkbox" checked></div>
+          <div class="toggle"><div class="toggle-text"><span class="toggle-title"><span data-i18n="notifyOnComplete">Completion Notification</span> <span class="info" data-tip-i18n="tipNotify">i</span></span></div><input id="notifyOnComplete" type="checkbox" checked></div>
+          <div class="toggle"><div class="toggle-text"><span class="toggle-title"><span data-i18n="playSoundOnComplete">Completion Sound</span> <span class="info" data-tip-i18n="tipSound">i</span></span></div><input id="playSoundOnComplete" type="checkbox"></div>
         </div>
       </div>
       <div class="dock"><button class="btn-primary" id="startMerge"></button></div>
     </aside>
   </main>
   <div class="tooltip" id="tooltip"></div>
+  <div class="toast" id="toast"><div class="toast-title" id="toastTitle"></div><div class="toast-body" id="toastBody"></div></div>
   <script>
     const messages = {
       en: {
@@ -552,17 +651,21 @@ HTML = r"""<!doctype html>
         gpuAcceleration: "GPU Acceleration", targetAudioCodec: "Target Audio Codec", crfQuality: "CRF (Quality)", lowerBetter: "Lower = better", preset: "Preset",
         fpsPolicy: "FPS Policy", resolutionPolicy: "Resolution Policy", padColor: "Pad Color", ffmpegPath: "FFmpeg Path", ffprobePath: "FFprobe Path",
         recursiveScan: "Recursive Scan", overwrite: "Overwrite", dryRun: "Dry Run", keepTempFiles: "Keep Temp Files", autoDownloadDeps: "Auto Download Deps",
+        notifyOnComplete: "Completion Notification", playSoundOnComplete: "Completion Sound",
         outputDirHint: "Leave empty to use the default merged folder under the source directory.", tempDirHint: "Leave empty to use the system default temp directory.",
         sortNameNaturalAsc: "Filename natural (A-Z)", sortNameNaturalDesc: "Filename natural (Z-A)", sortNameAsc: "Filename text (A-Z)", sortNameDesc: "Filename text (Z-A)",
         sortModifiedAsc: "Modified time (oldest first)", sortModifiedDesc: "Modified time (newest first)", sortSizeAsc: "File size (smallest first)", sortSizeDesc: "File size (largest first)",
         startMerge: "▷ START MERGE", stopMerge: "■ STOP MERGE", switchLanguage: "Switch language",
         modeSelected: "{mode} MODE SELECTED", selectFolderPlan: "Select a folder to preview the merge plan.",
+        selectAllFiles: "Select All", clearFileSelection: "Clear Selection", selectedCount: "{selected}/{total} selected", noSelectedFiles: "Select at least one file to merge.",
         fastPlan: "Tool will stream-copy compatible groups only. Incompatible files will be skipped.",
         optimalPlan: "Tool will create up to {count} output file(s), separated by landscape and portrait display orientation.",
         extremePlan: "Tool will normalize all files to one display canvas and produce one output file.",
         groupLabel: "{orientation} group ({size})", ready: "Ready", needsTranscode: "Needs Transcode", summary: "{files} files detected - {groups} groups",
         folderCancelled: "Folder selection was cancelled or is unavailable on this system.", scanning: "Scanning {path}", filesAnalyzed: "{count} files analyzed.",
         startingMerge: "Starting {mode} merge", stoppingMerge: "Stopping current merge task...", selectBegin: "Select a source folder to begin.",
+        mergeCompletedTitle: "Merge Completed", mergeCompletedBody: "Your video merge task has finished.", mergeFailedTitle: "Merge Failed", mergeFailedBody: "The merge task ended with an error. Check the process console for details.",
+        mergeStoppedTitle: "Merge Stopped", mergeStoppedBody: "The merge task was stopped by the user.",
         tipName: "Maps to --name. Leave empty to use automatic names based on folder, mode, and resolution.",
         tipOutputDir: "Maps to --output-dir. Leave empty to create/use a merged folder under the source directory.",
         tipTempDir: "Maps to --temp-dir. Leave empty to use the system default temp directory.",
@@ -582,7 +685,9 @@ HTML = r"""<!doctype html>
         tipOverwrite: "Maps to --overwrite. Replace existing output files instead of appending a numeric suffix.",
         tipDryRun: "Maps to --dry-run. Prints commands and plan without running FFmpeg.",
         tipKeepTemp: "Maps to --keep-temp. Keeps preprocessed intermediate files for inspection.",
-        tipAutoDownload: "Maps to --auto-download-deps / --no-auto-download-deps. Attempts to download ffmpeg/ffprobe when missing."
+        tipAutoDownload: "Maps to --auto-download-deps / --no-auto-download-deps. Attempts to download ffmpeg/ffprobe when missing.",
+        tipNotify: "Shows an in-app notification when a merge task completes, fails, or is stopped.",
+        tipSound: "Plays a short in-app sound together with the completion notification."
       },
       zh: {
         ffmpegNotChecked: "! FFmpeg 未检查", ffmpegChecking: "... 正在检查 FFmpeg", ffmpegInstalled: "✓ FFmpeg 已安装", ffmpegMissing: "! FFmpeg 缺失", refreshFfmpeg: "重新检查 FFmpeg",
@@ -594,17 +699,20 @@ HTML = r"""<!doctype html>
         gpuAcceleration: "GPU 加速", targetAudioCodec: "目标音频编码", crfQuality: "CRF（质量）", lowerBetter: "越低质量越高", preset: "编码预设",
         fpsPolicy: "帧率策略", resolutionPolicy: "分辨率策略", padColor: "填充颜色", ffmpegPath: "FFmpeg 路径", ffprobePath: "FFprobe 路径",
         recursiveScan: "递归扫描", overwrite: "覆盖输出", dryRun: "试运行", keepTempFiles: "保留临时文件", autoDownloadDeps: "自动下载依赖",
+        notifyOnComplete: "完成后提示", playSoundOnComplete: "完成提示音",
         outputDirHint: "留空时默认使用源目录下的 merged 文件夹。", tempDirHint: "留空时使用系统默认临时目录。",
         sortNameNaturalAsc: "文件名自然升序", sortNameNaturalDesc: "文件名自然降序", sortNameAsc: "文件名文本升序", sortNameDesc: "文件名文本降序",
         sortModifiedAsc: "修改时间从旧到新", sortModifiedDesc: "修改时间从新到旧", sortSizeAsc: "文件大小从小到大", sortSizeDesc: "文件大小从大到小",
         startMerge: "▷ 开始合并", stopMerge: "■ 停止合并", switchLanguage: "切换语言",
         modeSelected: "已选择 {mode} 模式", selectFolderPlan: "选择文件夹后预览合并计划。",
+        selectAllFiles: "全选", clearFileSelection: "取消选中", selectedCount: "已选 {selected}/{total}", noSelectedFiles: "请至少选择一个要合并的视频文件。",
         fastPlan: "工具将仅对兼容分组合并，跳过不兼容文件。",
         optimalPlan: "工具将按横竖屏生成最多 {count} 个输出文件。",
         extremePlan: "工具将把所有文件统一到一个画布并生成一个输出文件。",
         groupLabel: "{orientation} 分组（{size}）", ready: "就绪", needsTranscode: "需要转码", summary: "检测到 {files} 个文件 - {groups} 个分组",
         folderCancelled: "文件夹选择已取消，或当前系统不可用。", scanning: "正在扫描 {path}", filesAnalyzed: "已分析 {count} 个文件。",
         startingMerge: "开始 {mode} 合并", stoppingMerge: "正在停止当前合并任务...", selectBegin: "请选择源文件夹开始。",
+        mergeCompletedTitle: "合并完成", mergeCompletedBody: "视频合并任务已完成。", mergeFailedTitle: "合并失败", mergeFailedBody: "合并任务发生错误，请查看处理控制台。", mergeStoppedTitle: "合并已停止", mergeStoppedBody: "用户已手动停止当前合并任务。",
         tipName: "对应 --name。留空时根据文件夹、模式和分辨率自动命名。",
         tipOutputDir: "对应 --output-dir。留空时在源目录下创建或使用 merged 文件夹。",
         tipTempDir: "对应 --temp-dir。留空时使用系统默认临时目录。",
@@ -624,15 +732,19 @@ HTML = r"""<!doctype html>
         tipOverwrite: "对应 --overwrite。替换已有输出，不追加数字后缀。",
         tipDryRun: "对应 --dry-run。只打印命令和计划，不运行 FFmpeg。",
         tipKeepTemp: "对应 --keep-temp。保留预处理临时文件用于检查。",
-        tipAutoDownload: "对应 --auto-download-deps / --no-auto-download-deps。缺少 ffmpeg/ffprobe 时尝试自动下载。"
+        tipAutoDownload: "对应 --auto-download-deps / --no-auto-download-deps。缺少 ffmpeg/ffprobe 时尝试自动下载。",
+        tipNotify: "合并完成、失败或停止后，在应用内显示提示。",
+        tipSound: "显示完成提示时播放一段短提示音。"
       }
     };
     const state = {
       mode: "optimal",
       inputDir: "",
       files: [],
+      selectedPaths: new Set(),
       running: false,
       statusTimer: null,
+      mergeWasRunning: false,
       lang: "en",
       deps: { status: "notChecked", message: "" },
       defaults: {}
@@ -653,6 +765,8 @@ HTML = r"""<!doctype html>
       renderDepStatus();
       setRunning(state.running);
       renderModes();
+      if (state.files.length) renderFiles(state.files);
+      else updateSelectionControls();
       if (!state.files.length && !state.inputDir) $("summary").textContent = t("noFolderSelected");
     }
     function renderDepStatus() {
@@ -682,6 +796,7 @@ HTML = r"""<!doctype html>
       const button = $("startMerge");
       button.textContent = running ? t("stopMerge") : t("startMerge");
       button.classList.toggle("stop", running);
+      updateSelectionControls();
     }
     async function api(path, body) {
       const headers = {"X-VideoMergingTool-Token": "__API_TOKEN__"};
@@ -697,7 +812,7 @@ HTML = r"""<!doctype html>
     }
     function readConfig() {
       const values = { lang: state.lang, mode: state.mode };
-      const ids = ["format", "sortBy", "codec", "gpu", "audioCodec", "crf", "preset", "fpsPolicy", "resolutionPolicy", "padColor", "outputDir", "tempDir", "ffmpegPath", "ffprobePath", "recursive", "overwrite", "dryRun", "keepTemp", "autoDownloadDeps"];
+      const ids = ["format", "sortBy", "codec", "gpu", "audioCodec", "crf", "preset", "fpsPolicy", "resolutionPolicy", "padColor", "outputDir", "tempDir", "ffmpegPath", "ffprobePath", "recursive", "overwrite", "dryRun", "keepTemp", "autoDownloadDeps", "notifyOnComplete", "playSoundOnComplete"];
       ids.forEach(id => {
         const node = $(id);
         if (pathFields.includes(id) && node.dataset.custom !== "true") return;
@@ -779,12 +894,51 @@ HTML = r"""<!doctype html>
       $("planTitle").textContent = t("modeSelected", { mode: state.mode.toUpperCase() });
       updatePlan();
     }
+    function escapeHtml(value) {
+      return String(value ?? "").replace(/[&<>"']/g, char => ({
+        "&": "&amp;",
+        "<": "&lt;",
+        ">": "&gt;",
+        '"': "&quot;",
+        "'": "&#39;"
+      })[char]);
+    }
+    function selectedFiles() {
+      return state.files.filter(file => state.selectedPaths.has(file.path));
+    }
+    function updateSelectionControls() {
+      const total = state.files.length;
+      const selected = selectedFiles().length;
+      $("selectionCount").textContent = total ? t("selectedCount", { selected, total }) : "";
+      $("selectAllFiles").disabled = state.running || total === 0 || selected === total;
+      $("clearFileSelection").disabled = state.running || selected === 0;
+      if (!state.running) $("startMerge").disabled = selected === 0;
+    }
+    function selectAllFiles() {
+      state.selectedPaths = new Set(state.files.map(file => file.path));
+      renderFiles(state.files);
+    }
+    function clearFileSelection() {
+      state.selectedPaths.clear();
+      renderFiles(state.files);
+    }
+    function setFileSelected(path, selected) {
+      if (selected) state.selectedPaths.add(path);
+      else state.selectedPaths.delete(path);
+      updateSelectionControls();
+      updatePlan();
+    }
     function updatePlan() {
       if (!state.files.length) {
         $("planText").textContent = t("selectFolderPlan");
         return;
       }
-      const groups = new Set(state.files.map(file => file.orientation));
+      const files = selectedFiles();
+      if (!files.length) {
+        $("planText").textContent = t("noSelectedFiles");
+        return;
+      }
+      const groups = new Set(files.map(file => file.orientation));
       if (state.mode === "fast") {
         $("planText").textContent = t("fastPlan");
       } else if (state.mode === "optimal") {
@@ -804,22 +958,28 @@ HTML = r"""<!doctype html>
       Object.entries(by).forEach(([orientation, group]) => {
         const w = Math.max(...group.map(file => file.display_width));
         const h = Math.max(...group.map(file => file.display_height));
-        rows.insertAdjacentHTML("beforeend", `<tr class="group-row"><td colspan="6">${t("groupLabel", { orientation, size: `${w}x${h}` })}</td></tr>`);
+        rows.insertAdjacentHTML("beforeend", `<tr class="group-row"><td colspan="7">${escapeHtml(t("groupLabel", { orientation, size: `${w}x${h}` }))}</td></tr>`);
         group.forEach(file => {
           const cls = file.fast_ready ? "status-ok" : "status-warn";
           const status = file.fast_ready ? t("ready") : t("needsTranscode");
+          const checked = state.selectedPaths.has(file.path) ? "checked" : "";
           rows.insertAdjacentHTML("beforeend", `
             <tr>
-              <td title="${file.path}">${file.name}</td>
-              <td class="mono">${file.display_width}x${file.display_height}</td>
-              <td class="mono">${file.video_codec}/${file.audio_codec || "none"}</td>
-              <td class="mono">${file.fps}</td>
-              <td class="mono">${file.duration}</td>
-              <td class="${cls}">${status}</td>
+              <td class="select-cell"><input class="file-checkbox" type="checkbox" data-path="${escapeHtml(file.path)}" ${checked}></td>
+              <td title="${escapeHtml(file.path)}">${escapeHtml(file.name)}</td>
+              <td class="mono">${escapeHtml(file.display_width)}x${escapeHtml(file.display_height)}</td>
+              <td class="mono">${escapeHtml(file.video_codec)}/${escapeHtml(file.audio_codec || "none")}</td>
+              <td class="mono">${escapeHtml(file.fps)}</td>
+              <td class="mono">${escapeHtml(file.duration)}</td>
+              <td class="${cls}">${escapeHtml(status)}</td>
             </tr>`);
         });
       });
       $("summary").textContent = t("summary", { files: files.length, groups: Object.keys(by).length }).toUpperCase();
+      rows.querySelectorAll(".file-checkbox").forEach(node => {
+        node.addEventListener("change", () => setFileSelected(node.dataset.path, node.checked));
+      });
+      updateSelectionControls();
       updatePlan();
     }
     async function selectFolder(kind) {
@@ -848,6 +1008,7 @@ HTML = r"""<!doctype html>
       try {
         const payload = await api("/scan", { input_dir: state.inputDir, recursive: $("recursive").checked, sort_by: $("sortBy").value });
         state.files = payload.files;
+        state.selectedPaths = new Set(payload.files.map(file => file.path));
         renderFiles(payload.files);
         progress(100);
         log(t("filesAnalyzed", { count: payload.files.length }));
@@ -864,6 +1025,12 @@ HTML = r"""<!doctype html>
       if (!state.inputDir) {
         await selectFolder("source");
         if (!state.inputDir) return;
+      }
+      const files = selectedFiles();
+      if (!files.length) {
+        log(t("noSelectedFiles"));
+        updateSelectionControls();
+        return;
       }
       progress(4);
       log(t("startingMerge", { mode: state.mode }));
@@ -886,6 +1053,7 @@ HTML = r"""<!doctype html>
           ffmpeg_path: configPathValue("ffmpegPath"),
           ffprobe_path: configPathValue("ffprobePath"),
           temp_dir: configPathValue("tempDir"),
+          selected_files: files.map(file => file.path),
           recursive: $("recursive").checked,
           overwrite: $("overwrite").checked,
           dry_run: $("dryRun").checked,
@@ -893,6 +1061,7 @@ HTML = r"""<!doctype html>
           auto_download_deps: $("autoDownloadDeps").checked
         });
         setRunning(true);
+        state.mergeWasRunning = true;
         log(`Command: ${payload.command.join(" ")}`);
         if (state.statusTimer) clearInterval(state.statusTimer);
         state.statusTimer = setInterval(async () => {
@@ -904,11 +1073,73 @@ HTML = r"""<!doctype html>
           if (!status.running) {
             clearInterval(state.statusTimer);
             state.statusTimer = null;
+            if (state.mergeWasRunning) {
+              state.mergeWasRunning = false;
+              notifyMergeFinished(status.logs || []);
+            }
           }
         }, 500);
       } catch (error) {
         progress(0);
         setRunning(false);
+        log(`ERROR: ${error.message}`);
+      }
+    }
+    async function notifyMergeFinished(logs) {
+      if (!$("notifyOnComplete").checked) return;
+      const text = logs.join("\n");
+      let title = t("mergeCompletedTitle");
+      let body = t("mergeCompletedBody");
+      let kind = "success";
+      if (text.includes("Merge stopped by user.")) {
+        title = t("mergeStoppedTitle");
+        body = t("mergeStoppedBody");
+        kind = "error";
+      } else if (text.includes("ERROR:") || text.includes("Merge failed")) {
+        title = t("mergeFailedTitle");
+        body = t("mergeFailedBody");
+        kind = "error";
+      }
+      try {
+        const result = await api("/notify", {
+          title,
+          body,
+          sound: $("playSoundOnComplete").checked,
+          kind
+        });
+        if (!result.ok) showToast(title, body, kind);
+      } catch (error) {
+        log(`ERROR: ${error.message}`);
+        showToast(title, body, kind);
+        if ($("playSoundOnComplete").checked) playNoticeSound(kind);
+      }
+    }
+    function showToast(title, body, kind) {
+      const toast = $("toast");
+      $("toastTitle").textContent = title;
+      $("toastBody").textContent = body;
+      toast.classList.toggle("error", kind === "error");
+      toast.style.display = "block";
+      if (toast._timer) clearTimeout(toast._timer);
+      toast._timer = setTimeout(() => { toast.style.display = "none"; }, 7000);
+    }
+    function playNoticeSound(kind) {
+      try {
+        const AudioContext = window.AudioContext || window.webkitAudioContext;
+        if (!AudioContext) return;
+        const context = new AudioContext();
+        const oscillator = context.createOscillator();
+        const gain = context.createGain();
+        oscillator.type = "sine";
+        oscillator.frequency.value = kind === "error" ? 220 : 440;
+        gain.gain.setValueAtTime(0.0001, context.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.16, context.currentTime + 0.02);
+        gain.gain.exponentialRampToValueAtTime(0.0001, context.currentTime + 0.45);
+        oscillator.connect(gain);
+        gain.connect(context.destination);
+        oscillator.start();
+        oscillator.stop(context.currentTime + 0.5);
+      } catch (error) {
         log(`ERROR: ${error.message}`);
       }
     }
@@ -928,6 +1159,8 @@ HTML = r"""<!doctype html>
     $("selectSource").addEventListener("click", () => selectFolder("source"));
     $("selectOutput").addEventListener("click", () => selectFolder("output"));
     $("selectTemp").addEventListener("click", () => selectFolder("temp"));
+    $("selectAllFiles").addEventListener("click", selectAllFiles);
+    $("clearFileSelection").addEventListener("click", clearFileSelection);
     $("refresh").addEventListener("click", scan);
     $("startMerge").addEventListener("click", merge);
     $("githubLink").addEventListener("click", async () => {
@@ -939,7 +1172,7 @@ HTML = r"""<!doctype html>
       if (state.files.length) renderFiles(state.files);
       scheduleSaveConfig();
     });
-    ["format", "sortBy", "codec", "gpu", "audioCodec", "crf", "preset", "fpsPolicy", "resolutionPolicy", "padColor", "outputDir", "tempDir", "ffmpegPath", "ffprobePath", "recursive", "overwrite", "dryRun", "keepTemp", "autoDownloadDeps"].forEach(id => {
+    ["format", "sortBy", "codec", "gpu", "audioCodec", "crf", "preset", "fpsPolicy", "resolutionPolicy", "padColor", "outputDir", "tempDir", "ffmpegPath", "ffprobePath", "recursive", "overwrite", "dryRun", "keepTemp", "autoDownloadDeps", "notifyOnComplete", "playSoundOnComplete"].forEach(id => {
       const node = $(id);
       if (pathFields.includes(id)) {
         node.addEventListener("input", () => {
@@ -951,6 +1184,11 @@ HTML = r"""<!doctype html>
       node.addEventListener("change", scheduleSaveConfig);
     });
     $("ffmpegStatus").addEventListener("click", checkDeps);
+    $("notifyOnComplete").addEventListener("change", async () => {
+      if ($("notifyOnComplete").checked) {
+        try { await api("/notify-permission", {}); } catch (error) {}
+      }
+    });
     document.querySelectorAll(".info").forEach(icon => {
       icon.addEventListener("mouseenter", () => {
         const tip = $("tooltip");
@@ -978,6 +1216,9 @@ HTML = r"""<!doctype html>
       applyLanguage();
       log(t("selectBegin"));
       checkDeps();
+      if ($("notifyOnComplete").checked) {
+        try { await api("/notify-permission", {}); } catch (error) {}
+      }
     })();
   </script>
 </body>
@@ -1153,6 +1394,12 @@ def _make_handler(state: GuiState, api_token: str):
             if parsed.path == "/open-url":
                 self._open_url(payload)
                 return
+            if parsed.path == "/notify":
+                self._notify(payload)
+                return
+            if parsed.path == "/notify-permission":
+                self._notify_permission()
+                return
             self._send_json({"error": "Not found"}, HTTPStatus.NOT_FOUND)
 
         def _deps(self) -> None:
@@ -1188,6 +1435,17 @@ def _make_handler(state: GuiState, api_token: str):
             webbrowser.open(url)
             self._send_json({"ok": True})
 
+        def _notify(self, payload: dict[str, object]) -> None:
+            title = str(payload.get("title") or "VideoMergingTool")
+            body = str(payload.get("body") or "")
+            sound = bool(payload.get("sound"))
+            ok, message = _show_system_notification(title, body, sound)
+            self._send_json({"ok": ok, "message": message})
+
+        def _notify_permission(self) -> None:
+            ok, message = _request_notification_permission()
+            self._send_json({"ok": ok, "message": message})
+
         def _scan(self, payload: dict[str, object]) -> None:
             try:
                 logger = _gui_logger(state)
@@ -1213,6 +1471,10 @@ def _make_handler(state: GuiState, api_token: str):
                 self._send_json({"error": str(exc)}, HTTPStatus.INTERNAL_SERVER_ERROR)
 
         def _merge(self, payload: dict[str, object]) -> None:
+            selected_files = payload.get("selected_files")
+            if isinstance(selected_files, list) and not selected_files:
+                self._send_json({"error": "No source files were selected."}, HTTPStatus.BAD_REQUEST)
+                return
             if not state.begin_run(cleanup_temp_on_cancel=not bool(payload.get("keep_temp"))):
                 self._send_json({"error": "A merge is already running."}, HTTPStatus.CONFLICT)
                 return
@@ -1314,6 +1576,162 @@ def _detect_gui_ffmpeg_encoders(tools) -> set[str]:
     return encoders
 
 
+def _request_notification_permission() -> tuple[bool, str]:
+    if platform.system() != "Darwin":
+        return True, "Notification permission is not pre-requested on this platform."
+    try:
+        return _request_macos_notification_permission()
+    except Exception as exc:
+        return False, str(exc)
+
+
+def _request_macos_notification_permission() -> tuple[bool, str]:
+    try:
+        from UserNotifications import (  # type: ignore[import-not-found]
+            UNAuthorizationOptionAlert,
+            UNAuthorizationOptionSound,
+            UNUserNotificationCenter,
+        )
+    except Exception as exc:
+        return False, f"macOS notification framework unavailable: {exc}"
+
+    completed = threading.Event()
+    result = {"ok": False, "message": "Permission request timed out."}
+
+    def completion(granted, error) -> None:  # type: ignore[no-untyped-def]
+        result["ok"] = bool(granted)
+        result["message"] = str(error) if error else ("Notification permission granted." if granted else "Notification permission denied.")
+        completed.set()
+
+    center = UNUserNotificationCenter.currentNotificationCenter()
+    center.requestAuthorizationWithOptions_completionHandler_(
+        UNAuthorizationOptionAlert | UNAuthorizationOptionSound,
+        completion,
+    )
+    completed.wait(timeout=5)
+    return bool(result["ok"]), str(result["message"])
+
+
+def _show_system_notification(title: str, body: str, sound: bool) -> tuple[bool, str]:
+    system = platform.system()
+    try:
+        if system == "Darwin":
+            return _show_macos_notification(title, body, sound)
+        if system == "Windows":
+            return _show_windows_notification(title, body, sound)
+    except Exception as exc:
+        return False, str(exc)
+    return False, f"System notifications are not implemented for {system or 'this platform'}."
+
+
+def _show_macos_notification(title: str, body: str, sound: bool) -> tuple[bool, str]:
+    permission_result = _request_macos_notification_permission()
+    _request_macos_dock_attention()
+    errors = []
+    for notifier in (_show_macos_notification_with_nsusernotification, _show_macos_notification_with_usernotifications):
+        result = notifier(title, body, sound)
+        if result[0]:
+            return result
+        errors.append(result[1])
+    message = "; ".join(error for error in errors if error) or permission_result[1] or "macOS notification failed."
+    return False, message
+
+
+def _request_macos_dock_attention() -> tuple[bool, str]:
+    try:
+        from AppKit import NSApplication, NSCriticalRequest  # type: ignore[import-not-found]
+
+        app = NSApplication.sharedApplication()
+        app.requestUserAttention_(NSCriticalRequest)
+        return True, "Dock attention requested."
+    except Exception as exc:
+        return False, str(exc)
+
+
+def _show_macos_notification_with_nsusernotification(title: str, body: str, sound: bool) -> tuple[bool, str]:
+    try:
+        from Foundation import (  # type: ignore[import-not-found]
+            NSUserNotification,
+            NSUserNotificationCenter,
+            NSUserNotificationDefaultSoundName,
+        )
+    except Exception as exc:
+        return False, f"NSUserNotification unavailable: {exc}"
+
+    notification = NSUserNotification.alloc().init()
+    notification.setTitle_(title)
+    notification.setInformativeText_(body)
+    if sound:
+        notification.setSoundName_(NSUserNotificationDefaultSoundName)
+    NSUserNotificationCenter.defaultUserNotificationCenter().deliverNotification_(notification)
+    return True, "macOS notification sent by VideoMergingTool."
+
+
+def _show_macos_notification_with_usernotifications(title: str, body: str, sound: bool) -> tuple[bool, str]:
+    try:
+        from UserNotifications import (  # type: ignore[import-not-found]
+            UNMutableNotificationContent,
+            UNNotificationRequest,
+            UNNotificationSound,
+            UNTimeIntervalNotificationTrigger,
+            UNUserNotificationCenter,
+        )
+    except Exception as exc:
+        return False, f"macOS notification framework unavailable: {exc}"
+
+    identifier = f"videomerge-{int(time.time() * 1000)}"
+    content = UNMutableNotificationContent.alloc().init()
+    content.setTitle_(title)
+    content.setBody_(body)
+    if sound:
+        content.setSound_(UNNotificationSound.defaultSound())
+    trigger = UNTimeIntervalNotificationTrigger.triggerWithTimeInterval_repeats_(0.1, False)
+    request = UNNotificationRequest.requestWithIdentifier_content_trigger_(identifier, content, trigger)
+    center = UNUserNotificationCenter.currentNotificationCenter()
+    center.addNotificationRequest_withCompletionHandler_(request, None)
+    return True, "macOS notification sent."
+
+
+def _show_windows_notification(title: str, body: str, sound: bool) -> tuple[bool, str]:
+    script = _windows_notification_script(title, body, sound)
+    subprocess.Popen(
+        ["powershell", "-NoProfile", "-STA", "-ExecutionPolicy", "Bypass", "-Command", script],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        **subprocess_window_kwargs(),
+    )
+    return True, "Windows notification requested."
+
+
+def _windows_notification_script(title: str, body: str, sound: bool) -> str:
+    title_ps = _powershell_single_quote(title)
+    body_ps = _powershell_single_quote(body)
+    sound_ps = "$true" if sound else "$false"
+    return f"""
+$ErrorActionPreference = 'Stop'
+try {{
+  Add-Type -AssemblyName System.Windows.Forms
+  Add-Type -AssemblyName System.Drawing
+  $notify = New-Object System.Windows.Forms.NotifyIcon
+  $notify.Icon = [System.Drawing.SystemIcons]::Information
+  $notify.BalloonTipTitle = {title_ps}
+  $notify.BalloonTipText = {body_ps}
+  $notify.Visible = $true
+  if ({sound_ps}) {{ [System.Media.SystemSounds]::Asterisk.Play() }}
+  $notify.ShowBalloonTip(5000)
+  [System.Windows.Forms.Application]::DoEvents()
+  Start-Sleep -Seconds 6
+  $notify.Dispose()
+}} catch {{
+  if ({sound_ps}) {{ [System.Media.SystemSounds]::Asterisk.Play() }}
+}}
+"""
+
+
+def _powershell_single_quote(value: str) -> str:
+    return "'" + value.replace("'", "''") + "'"
+
+
 def _build_merge_command(payload: dict[str, object]) -> list[str]:
     if getattr(sys, "frozen", False):
         cmd = [sys.executable, "merge", str(payload["input_dir"])]
@@ -1349,6 +1767,9 @@ def _build_merge_command(payload: dict[str, object]) -> list[str]:
         cmd.extend(["--ffprobe-path", str(payload["ffprobe_path"])])
     if payload.get("temp_dir"):
         cmd.extend(["--temp-dir", str(payload["temp_dir"])])
+    selected_file_list = _write_selected_file_list(payload)
+    if selected_file_list:
+        cmd.extend(["--selected-files", str(selected_file_list)])
     if not payload.get("recursive", True):
         cmd.append("--no-recursive")
     if payload.get("overwrite"):
@@ -1360,6 +1781,17 @@ def _build_merge_command(payload: dict[str, object]) -> list[str]:
     if not payload.get("auto_download_deps", True):
         cmd.append("--no-auto-download-deps")
     return cmd
+
+
+def _write_selected_file_list(payload: dict[str, object]) -> Path | None:
+    selected = payload.get("selected_files")
+    if not isinstance(selected, list):
+        return None
+    paths = [str(path) for path in selected if isinstance(path, str) and path]
+    handle = tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=".json", prefix="videomerge_selected_", delete=False)
+    with handle:
+        json.dump(paths, handle, ensure_ascii=False)
+    return Path(handle.name)
 
 
 def _run_merge(command: list[str], state: GuiState) -> None:
@@ -1399,7 +1831,20 @@ def _run_merge(command: list[str], state: GuiState) -> None:
     except Exception as exc:
         state.log(f"ERROR: {exc}")
     finally:
+        _cleanup_selected_file_list(command)
         state.finish_process()
+
+
+def _cleanup_selected_file_list(command: list[str]) -> None:
+    try:
+        index = command.index("--selected-files")
+    except ValueError:
+        return
+    if index + 1 >= len(command):
+        return
+    path = Path(command[index + 1])
+    if path.name.startswith("videomerge_selected_") and path.suffix == ".json":
+        path.unlink(missing_ok=True)
 
 
 def _cleanup_cancel_temp_dirs(state: GuiState) -> None:
@@ -1468,13 +1913,20 @@ def _pick_folder(kind: str) -> str:
     }
     title = titles.get(kind, "Select folder")
     if platform.system() == "Darwin":
-        return _pick_folder_macos(title)
-    if platform.system() == "Windows":
-        selected = _pick_folder_windows(title)
-        if selected is None:
-            return _pick_folder_tk(title)
+        selected = _pick_folder_macos(title)
+        _remember_picker_dir(kind, selected)
         return selected
-    return _pick_folder_tk(title)
+    if platform.system() == "Windows":
+        selected = _pick_folder_windows(title, _last_picker_dir(kind))
+        if selected is None:
+            selected = _pick_folder_tk(title)
+            _remember_picker_dir(kind, selected)
+            return selected
+        _remember_picker_dir(kind, selected)
+        return selected
+    selected = _pick_folder_tk(title)
+    _remember_picker_dir(kind, selected)
+    return selected
 
 
 def _pick_folder_macos(title: str) -> str:
@@ -1496,8 +1948,9 @@ def _pick_folder_macos(title: str) -> str:
     return ""
 
 
-def _pick_folder_windows(title: str) -> str | None:
+def _pick_folder_windows(title: str, initial_dir: str | None = None) -> str | None:
     escaped_title = title.replace("'", "''")
+    escaped_initial = (initial_dir or "").replace("'", "''")
     script = r"""
 Add-Type -AssemblyName System.Windows.Forms
 [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new()
@@ -1510,7 +1963,10 @@ $dialog.DereferenceLinks = $true
 $dialog.AutoUpgradeEnabled = $true
 $dialog.Filter = 'All files (*.*)|*.*'
 $dialog.FileName = 'Select this folder'
-$initial = [Environment]::GetFolderPath('MyVideos')
+$initial = '__INITIAL_DIR__'
+if (-not $initial -or -not (Test-Path -LiteralPath $initial -PathType Container)) {
+  $initial = [Environment]::GetFolderPath('MyVideos')
+}
 if (-not $initial -or -not (Test-Path -LiteralPath $initial -PathType Container)) {
   $initial = [Environment]::GetFolderPath('UserProfile')
 }
@@ -1525,7 +1981,7 @@ if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
     Write-Output (Split-Path -Parent $selected)
   }
 }
-""".replace("__TITLE__", escaped_title)
+""".replace("__TITLE__", escaped_title).replace("__INITIAL_DIR__", escaped_initial)
     try:
         result = subprocess.run(
             ["powershell", "-NoProfile", "-STA", "-ExecutionPolicy", "Bypass", "-Command", script],
@@ -1627,11 +2083,53 @@ def _load_gui_config() -> dict[str, object]:
 
 
 def _save_gui_config(payload: dict[str, object]) -> None:
-    allowed = set(CONFIG_FIELD_IDS) | {"lang", "mode"}
+    allowed = set(CONFIG_FIELD_IDS) | {"lang", "mode", "lastPickerDirs"}
     clean = {key: value for key, value in payload.items() if key in allowed}
+    if "lastPickerDirs" not in clean:
+        previous = _load_gui_config()
+        if isinstance(previous.get("lastPickerDirs"), dict):
+            clean["lastPickerDirs"] = previous["lastPickerDirs"]
     path = _config_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(clean, indent=2, ensure_ascii=False), encoding="utf-8")
+
+
+def _last_picker_dir(kind: str) -> str:
+    picker_dirs = _load_gui_config().get("lastPickerDirs")
+    if not isinstance(picker_dirs, dict):
+        return ""
+    value = picker_dirs.get(kind)
+    if not isinstance(value, str) or not value:
+        return ""
+    return str(_nearest_existing_dir(Path(value)))
+
+
+def _remember_picker_dir(kind: str, selected: str | None) -> None:
+    if not selected:
+        return
+    try:
+        selected_path = Path(selected)
+        directory = selected_path if selected_path.is_dir() else selected_path.parent
+        config = _load_gui_config()
+        picker_dirs = config.get("lastPickerDirs")
+        if not isinstance(picker_dirs, dict):
+            picker_dirs = {}
+        picker_dirs[kind] = str(directory)
+        config["lastPickerDirs"] = picker_dirs
+        _save_gui_config(config)
+    except OSError:
+        return
+
+
+def _nearest_existing_dir(path: Path) -> Path:
+    current = path.expanduser()
+    while not current.exists() and current.parent != current:
+        current = current.parent
+    if current.exists() and current.is_file():
+        return current.parent
+    if current.exists() and current.is_dir():
+        return current
+    return Path.home()
 
 
 def _pick_folder_tk(title: str) -> str:

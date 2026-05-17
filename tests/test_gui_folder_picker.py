@@ -4,7 +4,14 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from videomerge.gui import _default_display_paths, _load_gui_config, _normalize_picked_folder, _pick_folder, _save_gui_config
+from videomerge.gui import (
+    _default_display_paths,
+    _last_picker_dir,
+    _load_gui_config,
+    _normalize_picked_folder,
+    _pick_folder,
+    _save_gui_config,
+)
 
 
 class GuiFolderPickerTests(unittest.TestCase):
@@ -18,7 +25,7 @@ class GuiFolderPickerTests(unittest.TestCase):
             selected = _pick_folder("source")
 
         self.assertEqual(selected, "C:/Videos")
-        pick_windows.assert_called_once_with("Select source video folder")
+        pick_windows.assert_called_once_with("Select source video folder", "")
         pick_tk.assert_not_called()
         pick_macos.assert_not_called()
 
@@ -88,7 +95,7 @@ class GuiFolderPickerTests(unittest.TestCase):
             selected = _pick_folder("temp")
 
         self.assertEqual(selected, "C:/Temp")
-        pick_windows.assert_called_once_with("Select temp folder")
+        pick_windows.assert_called_once_with("Select temp folder", "")
 
     def test_windows_picker_uses_native_file_explorer_dialog(self) -> None:
         commands = []
@@ -111,6 +118,33 @@ class GuiFolderPickerTests(unittest.TestCase):
         self.assertIn("All files (*.*)|*.*", commands[0])
         self.assertIn("OutputEncoding", commands[0])
         self.assertNotIn("System.Windows.Forms.ListView", commands[0])
+
+    def test_windows_picker_uses_remembered_existing_folder(self) -> None:
+        with patch("videomerge.gui._config_path", return_value=Path("/tmp/vmt-picker-config.json")) as config_path:
+            path = config_path.return_value
+            try:
+                _save_gui_config({"lastPickerDirs": {"source": "/tmp"}})
+                with patch("videomerge.gui.platform.system", return_value="Windows"), patch(
+                    "videomerge.gui._pick_folder_windows",
+                    return_value="C:/Videos",
+                ) as pick_windows:
+                    selected = _pick_folder("source")
+            finally:
+                path.unlink(missing_ok=True)
+
+        self.assertEqual(selected, "C:/Videos")
+        pick_windows.assert_called_once_with("Select source video folder", "/tmp")
+
+    def test_last_picker_dir_falls_back_to_existing_parent(self) -> None:
+        with patch("videomerge.gui._config_path", return_value=Path("/tmp/vmt-picker-config.json")) as config_path:
+            path = config_path.return_value
+            try:
+                _save_gui_config({"lastPickerDirs": {"source": "/tmp/vmt-missing/child"}})
+                selected = _last_picker_dir("source")
+            finally:
+                path.unlink(missing_ok=True)
+
+        self.assertEqual(selected, "/tmp")
 
     def test_windows_picker_cancel_returns_empty_without_fallback(self) -> None:
         def fake_run(args, **kwargs):  # type: ignore[no-untyped-def]

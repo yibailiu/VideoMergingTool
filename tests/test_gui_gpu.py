@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import json
 import unittest
+from pathlib import Path
 from unittest.mock import Mock, patch
 
-from videomerge.gui import _build_merge_command, _detect_gui_ffmpeg_encoders
+from videomerge.gui import _build_merge_command, _detect_gui_ffmpeg_encoders, _windows_notification_script
 
 
 class GuiGpuTests(unittest.TestCase):
@@ -24,6 +26,24 @@ class GuiGpuTests(unittest.TestCase):
 
         self.assertIn("--sort-by", command)
         self.assertEqual(command[command.index("--sort-by") + 1], "modified-desc")
+
+    def test_gui_command_writes_selected_file_list(self) -> None:
+        command = _build_merge_command({"input_dir": "/tmp/in", "selected_files": ["/tmp/in/a.mp4", "/tmp/in/b.mp4"]})
+        try:
+            list_path = Path(command[command.index("--selected-files") + 1])
+            selected = json.loads(list_path.read_text(encoding="utf-8"))
+        finally:
+            if "--selected-files" in command:
+                Path(command[command.index("--selected-files") + 1]).unlink(missing_ok=True)
+
+        self.assertEqual(selected, ["/tmp/in/a.mp4", "/tmp/in/b.mp4"])
+
+    def test_windows_notification_script_uses_notify_icon_and_sound(self) -> None:
+        script = _windows_notification_script("A&B's", "done", True)
+
+        self.assertIn("System.Windows.Forms.NotifyIcon", script)
+        self.assertIn("[System.Media.SystemSounds]::Asterisk.Play()", script)
+        self.assertIn("A&B''s", script)
 
     def test_macos_gui_encoder_detection_retries_until_videotoolbox_is_seen(self) -> None:
         tools = Mock()
