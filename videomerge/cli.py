@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 import time
 from pathlib import Path
@@ -16,7 +17,7 @@ from .merge import concat_copy, warn_container_compatibility
 from .models import CodecPlan, MergeMode, MergeResult, Orientation, VideoFile
 from .naming import SUPPORTED_OUTPUT_FORMATS, auto_name, prepare_output_dir, unique_output_path
 from .probe import probe_files
-from .scanner import SORT_OPTIONS, scan_video_files
+from .scanner import SORT_OPTIONS, VIDEO_EXTENSIONS, scan_video_files
 from .transcode import preprocess_group
 
 app = typer.Typer(help="Local batch video merging tool powered by FFmpeg.", no_args_is_help=True)
@@ -63,6 +64,11 @@ def merge(
     gpu: GpuMode = typer.Option(GpuMode.off, "--gpu", help="GPU acceleration: off, auto, nvenc, qsv, amf, videotoolbox."),
     ffmpeg_path: Optional[Path] = typer.Option(None, "--ffmpeg-path", help="Explicit ffmpeg path."),
     ffprobe_path: Optional[Path] = typer.Option(None, "--ffprobe-path", help="Explicit ffprobe path."),
+    selected_files: Optional[Path] = typer.Option(
+        None,
+        "--selected-files",
+        help="JSON file containing the selected source video paths. Used by the GUI.",
+    ),
     auto_download_deps: bool = typer.Option(
         True,
         "--auto-download-deps/--no-auto-download-deps",
@@ -87,8 +93,12 @@ def merge(
             ffprobe_path=ffprobe_path,
         )
 
-        paths = scan_video_files(input_dir, recursive=recursive, sort_by=sort_by)
-        logger.info("Scanned %d candidate video files from %s using sort=%s", len(paths), input_dir, sort_by)
+        if selected_files:
+            paths = _load_selected_video_files(selected_files, input_dir)
+            logger.info("Loaded %d selected video file(s) from %s", len(paths), selected_files)
+        else:
+            paths = scan_video_files(input_dir, recursive=recursive, sort_by=sort_by)
+            logger.info("Scanned %d candidate video files from %s using sort=%s", len(paths), input_dir, sort_by)
         if not paths:
             raise VideoMergeError("No recognized video files found.")
 
@@ -223,6 +233,38 @@ def _validate_cli(
         raise VideoMergeError(f"Invalid --sort-by. Use one of: {', '.join(sorted(SORT_OPTIONS))}.")
     if temp_dir and temp_dir.exists() and not temp_dir.is_dir():
         raise VideoMergeError(f"Temp path is not a directory: {temp_dir}")
+
+
+def _load_selected_video_files(selected_files: Path, input_dir: Path) -> list[Path]:
+    if not selected_files.exists():
+        raise VideoMergeError(f"Selected file list does not exist: {selected_files}")
+    try:
+        payload = json.loads(selected_files.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise VideoMergeError(f"Selected file list is not readable JSON: {selected_files}") from exc
+    if not isinstance(payload, list):
+        raise VideoMergeError("Selected file list must be a JSON array.")
+
+    root = input_dir.resolve()
+    paths: list[Path] = []
+    seen: set[Path] = set()
+    for item in payload:
+        if not isinstance(item, str):
+            raise VideoMergeError("Selected file list contains a non-string path.")
+        path = Path(item).expanduser().resolve()
+        try:
+            path.relative_to(root)
+        except ValueError as exc:
+            raise VideoMergeError(f"Selected file is outside the input directory: {path}") from exc
+        if path in seen:
+            continue
+        if not path.is_file():
+            raise VideoMergeError(f"Selected video file does not exist: {path}")
+        if path.suffix.lower() not in VIDEO_EXTENSIONS:
+            raise VideoMergeError(f"Selected file is not a supported video format: {path}")
+        seen.add(path)
+        paths.append(path)
+    return paths
 
 
 def _log_merge_summary(total_video_count: int, merged_video_count: int, logger: logging.Logger) -> None:
