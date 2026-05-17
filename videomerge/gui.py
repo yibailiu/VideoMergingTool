@@ -219,7 +219,7 @@ HTML = r"""<!doctype html>
     }
     .table-wrap {
       margin: clamp(12px, 2vw, 24px);
-      margin-top: 10px;
+      margin-top: 8px;
       margin-bottom: 12px;
       border: 1px solid var(--border-subtle);
       border-radius: var(--radius-panel);
@@ -227,18 +227,23 @@ HTML = r"""<!doctype html>
       background: var(--bg-panel);
       min-height: 0;
     }
+    .source-table-section {
+      min-height: 0;
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr);
+      overflow: hidden;
+    }
     .table-toolbar {
-      margin: clamp(12px, 2vw, 24px);
-      margin-bottom: 0;
+      margin: 10px clamp(12px, 2vw, 24px) 0;
       display: flex;
       align-items: center;
       justify-content: space-between;
       gap: 10px;
-      min-height: 34px;
+      min-height: 28px;
     }
     .selection-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
     .selection-actions button {
-      padding: 7px 12px;
+      padding: 5px 10px;
       font-size: 12px;
       color: var(--text-secondary);
     }
@@ -528,31 +533,33 @@ HTML = r"""<!doctype html>
           <button class="btn-icon" id="refresh" title="Refresh">↻</button>
         </div>
       </div>
-      <div class="table-toolbar">
-        <div class="selection-actions">
-          <button id="selectAllFiles" type="button" data-i18n="selectAllFiles">Select All</button>
-          <button id="clearFileSelection" type="button" data-i18n="clearFileSelection">Clear Selection</button>
+      <div class="source-table-section">
+        <div class="table-toolbar">
+          <div class="selection-actions">
+            <button id="selectAllFiles" type="button" data-i18n="selectAllFiles">Select All</button>
+            <button id="clearFileSelection" type="button" data-i18n="clearFileSelection">Clear Selection</button>
+          </div>
+          <div class="label-micro selection-count" id="selectionCount"></div>
         </div>
-        <div class="label-micro selection-count" id="selectionCount"></div>
-      </div>
-      <div class="table-wrap">
-        <table>
-          <colgroup>
-            <col style="width: 46px">
-            <col style="width: 32%">
-            <col style="width: 14%">
-            <col style="width: 15%">
-            <col style="width: 11%">
-            <col style="width: 10%">
-            <col style="width: 14%">
-          </colgroup>
-          <thead>
-            <tr>
-              <th class="select-head"></th><th data-i18n="filename">Filename</th><th data-i18n="resolution">Resolution</th><th data-i18n="codec">Codec</th><th>FPS</th><th data-i18n="duration">Dur</th><th data-i18n="status">Status</th>
-            </tr>
-          </thead>
-          <tbody id="fileRows"></tbody>
-        </table>
+        <div class="table-wrap">
+          <table>
+            <colgroup>
+              <col style="width: 46px">
+              <col style="width: 32%">
+              <col style="width: 14%">
+              <col style="width: 15%">
+              <col style="width: 11%">
+              <col style="width: 10%">
+              <col style="width: 14%">
+            </colgroup>
+            <thead>
+              <tr>
+                <th class="select-head"></th><th data-i18n="filename">Filename</th><th data-i18n="resolution">Resolution</th><th data-i18n="codec">Codec</th><th>FPS</th><th data-i18n="duration">Dur</th><th data-i18n="status">Status</th>
+              </tr>
+            </thead>
+            <tbody id="fileRows"></tbody>
+          </table>
+        </div>
       </div>
       <div class="console">
         <div class="console-head"><span class="label-micro" data-i18n="processConsole">Process Console</span><span class="label-micro" id="progressText">0%</span></div>
@@ -1078,7 +1085,7 @@ HTML = r"""<!doctype html>
         log(`ERROR: ${error.message}`);
       }
     }
-    function notifyMergeFinished(logs) {
+    async function notifyMergeFinished(logs) {
       if (!$("notifyOnComplete").checked) return;
       const text = logs.join("\n");
       let title = t("mergeCompletedTitle");
@@ -1093,8 +1100,19 @@ HTML = r"""<!doctype html>
         body = t("mergeFailedBody");
         kind = "error";
       }
-      showToast(title, body, kind);
-      if ($("playSoundOnComplete").checked) playNoticeSound(kind);
+      try {
+        const result = await api("/notify", {
+          title,
+          body,
+          sound: $("playSoundOnComplete").checked,
+          kind
+        });
+        if (!result.ok) showToast(title, body, kind);
+      } catch (error) {
+        log(`ERROR: ${error.message}`);
+        showToast(title, body, kind);
+        if ($("playSoundOnComplete").checked) playNoticeSound(kind);
+      }
     }
     function showToast(title, body, kind) {
       const toast = $("toast");
@@ -1166,6 +1184,11 @@ HTML = r"""<!doctype html>
       node.addEventListener("change", scheduleSaveConfig);
     });
     $("ffmpegStatus").addEventListener("click", checkDeps);
+    $("notifyOnComplete").addEventListener("change", async () => {
+      if ($("notifyOnComplete").checked) {
+        try { await api("/notify-permission", {}); } catch (error) {}
+      }
+    });
     document.querySelectorAll(".info").forEach(icon => {
       icon.addEventListener("mouseenter", () => {
         const tip = $("tooltip");
@@ -1193,6 +1216,9 @@ HTML = r"""<!doctype html>
       applyLanguage();
       log(t("selectBegin"));
       checkDeps();
+      if ($("notifyOnComplete").checked) {
+        try { await api("/notify-permission", {}); } catch (error) {}
+      }
     })();
   </script>
 </body>
@@ -1368,6 +1394,12 @@ def _make_handler(state: GuiState, api_token: str):
             if parsed.path == "/open-url":
                 self._open_url(payload)
                 return
+            if parsed.path == "/notify":
+                self._notify(payload)
+                return
+            if parsed.path == "/notify-permission":
+                self._notify_permission()
+                return
             self._send_json({"error": "Not found"}, HTTPStatus.NOT_FOUND)
 
         def _deps(self) -> None:
@@ -1402,6 +1434,17 @@ def _make_handler(state: GuiState, api_token: str):
                 return
             webbrowser.open(url)
             self._send_json({"ok": True})
+
+        def _notify(self, payload: dict[str, object]) -> None:
+            title = str(payload.get("title") or "VideoMergingTool")
+            body = str(payload.get("body") or "")
+            sound = bool(payload.get("sound"))
+            ok, message = _show_system_notification(title, body, sound)
+            self._send_json({"ok": ok, "message": message})
+
+        def _notify_permission(self) -> None:
+            ok, message = _request_notification_permission()
+            self._send_json({"ok": ok, "message": message})
 
         def _scan(self, payload: dict[str, object]) -> None:
             try:
@@ -1531,6 +1574,178 @@ def _detect_gui_ffmpeg_encoders(tools) -> set[str]:
             return encoders
         time.sleep(0.35)
     return encoders
+
+
+def _request_notification_permission() -> tuple[bool, str]:
+    if platform.system() != "Darwin":
+        return True, "Notification permission is not pre-requested on this platform."
+    try:
+        return _request_macos_notification_permission()
+    except Exception as exc:
+        return False, str(exc)
+
+
+def _request_macos_notification_permission() -> tuple[bool, str]:
+    try:
+        from UserNotifications import (  # type: ignore[import-not-found]
+            UNAuthorizationOptionAlert,
+            UNAuthorizationOptionSound,
+            UNUserNotificationCenter,
+        )
+    except Exception as exc:
+        return False, f"macOS notification framework unavailable: {exc}"
+
+    completed = threading.Event()
+    result = {"ok": False, "message": "Permission request timed out."}
+
+    def completion(granted, error) -> None:  # type: ignore[no-untyped-def]
+        result["ok"] = bool(granted)
+        result["message"] = str(error) if error else ("Notification permission granted." if granted else "Notification permission denied.")
+        completed.set()
+
+    center = UNUserNotificationCenter.currentNotificationCenter()
+    center.requestAuthorizationWithOptions_completionHandler_(
+        UNAuthorizationOptionAlert | UNAuthorizationOptionSound,
+        completion,
+    )
+    completed.wait(timeout=5)
+    return bool(result["ok"]), str(result["message"])
+
+
+def _show_system_notification(title: str, body: str, sound: bool) -> tuple[bool, str]:
+    system = platform.system()
+    try:
+        if system == "Darwin":
+            return _show_macos_notification(title, body, sound)
+        if system == "Windows":
+            return _show_windows_notification(title, body, sound)
+    except Exception as exc:
+        return False, str(exc)
+    return False, f"System notifications are not implemented for {system or 'this platform'}."
+
+
+def _show_macos_notification(title: str, body: str, sound: bool) -> tuple[bool, str]:
+    permission_result = _request_macos_notification_permission()
+    script = f'display notification {_apple_script_quote(body)} with title {_apple_script_quote(title)}'
+    if sound:
+        script += ' sound name "Glass"'
+    process = subprocess.run(
+        ["osascript", "-e", script],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+        **subprocess_window_kwargs(),
+    )
+    if process.returncode == 0:
+        return True, "macOS notification sent with osascript."
+    framework_result = _show_macos_notification_with_framework(title, body, sound)
+    if framework_result[0]:
+        return framework_result
+    message = process.stderr.strip() or framework_result[1] or permission_result[1] or "macOS notification failed."
+    return False, message
+
+
+def _show_macos_notification_with_framework(title: str, body: str, sound: bool) -> tuple[bool, str]:
+    try:
+        from Foundation import NSDate  # type: ignore[import-not-found]
+        from UserNotifications import (  # type: ignore[import-not-found]
+            UNMutableNotificationContent,
+            UNNotificationRequest,
+            UNNotificationSound,
+            UNTimeIntervalNotificationTrigger,
+            UNUserNotificationCenter,
+        )
+    except Exception as exc:
+        return False, f"macOS notification framework unavailable: {exc}"
+
+    identifier = f"videomerge-{int(time.time() * 1000)}"
+    content = UNMutableNotificationContent.alloc().init()
+    content.setTitle_(title)
+    content.setBody_(body)
+    if sound:
+        content.setSound_(UNNotificationSound.defaultSound())
+    if NSDate is None:
+        return False, "Foundation unavailable."
+    trigger = UNTimeIntervalNotificationTrigger.triggerWithTimeInterval_repeats_(0.1, False)
+    request = UNNotificationRequest.requestWithIdentifier_content_trigger_(identifier, content, trigger)
+    center = UNUserNotificationCenter.currentNotificationCenter()
+    center.addNotificationRequest_withCompletionHandler_(request, None)
+    return True, "macOS notification sent."
+
+
+def _show_windows_notification(title: str, body: str, sound: bool) -> tuple[bool, str]:
+    script = _windows_toast_script(title, body, sound)
+    subprocess.Popen(
+        ["powershell", "-NoProfile", "-STA", "-ExecutionPolicy", "Bypass", "-Command", script],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        **subprocess_window_kwargs(),
+    )
+    return True, "Windows notification requested."
+
+
+def _windows_toast_script(title: str, body: str, sound: bool) -> str:
+    title_xml = _xml_escape(title)
+    body_xml = _xml_escape(body)
+    audio = '<audio src="ms-winsoundevent:Notification.Default"/>' if sound else '<audio silent="true"/>'
+    toast_xml = (
+        "<toast>"
+        "<visual><binding template=\"ToastGeneric\">"
+        f"<text>{title_xml}</text><text>{body_xml}</text>"
+        "</binding></visual>"
+        f"{audio}"
+        "</toast>"
+    )
+    toast_ps = _powershell_single_quote(toast_xml)
+    title_ps = _powershell_single_quote(title)
+    body_ps = _powershell_single_quote(body)
+    return f"""
+$ErrorActionPreference = 'SilentlyContinue'
+try {{
+  [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] > $null
+  [Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom.XmlDocument, ContentType = WindowsRuntime] > $null
+  $xml = New-Object Windows.Data.Xml.Dom.XmlDocument
+  $xml.LoadXml({toast_ps})
+  $toast = [Windows.UI.Notifications.ToastNotification]::new($xml)
+  $notifier = [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier('VideoMergingTool')
+  $notifier.Show($toast)
+  Start-Sleep -Milliseconds 500
+  exit 0
+}} catch {{
+  Add-Type -AssemblyName System.Windows.Forms
+  Add-Type -AssemblyName System.Drawing
+  $notify = New-Object System.Windows.Forms.NotifyIcon
+  $notify.Icon = [System.Drawing.SystemIcons]::Information
+  $notify.BalloonTipTitle = {title_ps}
+  $notify.BalloonTipText = {body_ps}
+  $notify.Visible = $true
+  $notify.ShowBalloonTip(5000)
+  if ({'$true' if sound else '$false'}) {{ [System.Media.SystemSounds]::Asterisk.Play() }}
+  Start-Sleep -Seconds 6
+  $notify.Dispose()
+}}
+"""
+
+
+def _apple_script_quote(value: str) -> str:
+    return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def _powershell_single_quote(value: str) -> str:
+    return "'" + value.replace("'", "''") + "'"
+
+
+def _xml_escape(value: str) -> str:
+    return (
+        value.replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace('"', "&quot;")
+        .replace("'", "&apos;")
+    )
 
 
 def _build_merge_command(payload: dict[str, object]) -> list[str]:
