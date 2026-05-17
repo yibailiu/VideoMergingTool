@@ -37,6 +37,9 @@ if [[ "$(uname -s)" == "Darwin" ]]; then
     --windowed
     --icon "$ICON_ICNS"
     --osx-bundle-identifier "com.yibailiu.VideoMergingTool"
+    --hidden-import Foundation
+    --hidden-import AppKit
+    --hidden-import UserNotifications
     --add-binary "$VENDOR_FFMPEG_DIR/ffmpeg:ffmpeg"
     --add-binary "$VENDOR_FFMPEG_DIR/ffprobe:ffmpeg"
   )

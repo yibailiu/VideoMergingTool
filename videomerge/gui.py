@@ -1626,31 +1626,49 @@ def _show_system_notification(title: str, body: str, sound: bool) -> tuple[bool,
 
 def _show_macos_notification(title: str, body: str, sound: bool) -> tuple[bool, str]:
     permission_result = _request_macos_notification_permission()
-    script = f'display notification {_apple_script_quote(body)} with title {_apple_script_quote(title)}'
-    if sound:
-        script += ' sound name "Glass"'
-    process = subprocess.run(
-        ["osascript", "-e", script],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        check=False,
-        **subprocess_window_kwargs(),
-    )
-    if process.returncode == 0:
-        return True, "macOS notification sent with osascript."
-    framework_result = _show_macos_notification_with_framework(title, body, sound)
-    if framework_result[0]:
-        return framework_result
-    message = process.stderr.strip() or framework_result[1] or permission_result[1] or "macOS notification failed."
+    _request_macos_dock_attention()
+    errors = []
+    for notifier in (_show_macos_notification_with_nsusernotification, _show_macos_notification_with_usernotifications):
+        result = notifier(title, body, sound)
+        if result[0]:
+            return result
+        errors.append(result[1])
+    message = "; ".join(error for error in errors if error) or permission_result[1] or "macOS notification failed."
     return False, message
 
 
-def _show_macos_notification_with_framework(title: str, body: str, sound: bool) -> tuple[bool, str]:
+def _request_macos_dock_attention() -> tuple[bool, str]:
     try:
-        from Foundation import NSDate  # type: ignore[import-not-found]
+        from AppKit import NSApplication, NSCriticalRequest  # type: ignore[import-not-found]
+
+        app = NSApplication.sharedApplication()
+        app.requestUserAttention_(NSCriticalRequest)
+        return True, "Dock attention requested."
+    except Exception as exc:
+        return False, str(exc)
+
+
+def _show_macos_notification_with_nsusernotification(title: str, body: str, sound: bool) -> tuple[bool, str]:
+    try:
+        from Foundation import (  # type: ignore[import-not-found]
+            NSUserNotification,
+            NSUserNotificationCenter,
+            NSUserNotificationDefaultSoundName,
+        )
+    except Exception as exc:
+        return False, f"NSUserNotification unavailable: {exc}"
+
+    notification = NSUserNotification.alloc().init()
+    notification.setTitle_(title)
+    notification.setInformativeText_(body)
+    if sound:
+        notification.setSoundName_(NSUserNotificationDefaultSoundName)
+    NSUserNotificationCenter.defaultUserNotificationCenter().deliverNotification_(notification)
+    return True, "macOS notification sent by VideoMergingTool."
+
+
+def _show_macos_notification_with_usernotifications(title: str, body: str, sound: bool) -> tuple[bool, str]:
+    try:
         from UserNotifications import (  # type: ignore[import-not-found]
             UNMutableNotificationContent,
             UNNotificationRequest,
@@ -1667,8 +1685,6 @@ def _show_macos_notification_with_framework(title: str, body: str, sound: bool) 
     content.setBody_(body)
     if sound:
         content.setSound_(UNNotificationSound.defaultSound())
-    if NSDate is None:
-        return False, "Foundation unavailable."
     trigger = UNTimeIntervalNotificationTrigger.triggerWithTimeInterval_repeats_(0.1, False)
     request = UNNotificationRequest.requestWithIdentifier_content_trigger_(identifier, content, trigger)
     center = UNUserNotificationCenter.currentNotificationCenter()
@@ -1677,7 +1693,7 @@ def _show_macos_notification_with_framework(title: str, body: str, sound: bool) 
 
 
 def _show_windows_notification(title: str, body: str, sound: bool) -> tuple[bool, str]:
-    script = _windows_toast_script(title, body, sound)
+    script = _windows_notification_script(title, body, sound)
     subprocess.Popen(
         ["powershell", "-NoProfile", "-STA", "-ExecutionPolicy", "Bypass", "-Command", script],
         stdout=subprocess.DEVNULL,
@@ -1687,34 +1703,13 @@ def _show_windows_notification(title: str, body: str, sound: bool) -> tuple[bool
     return True, "Windows notification requested."
 
 
-def _windows_toast_script(title: str, body: str, sound: bool) -> str:
-    title_xml = _xml_escape(title)
-    body_xml = _xml_escape(body)
-    audio = '<audio src="ms-winsoundevent:Notification.Default"/>' if sound else '<audio silent="true"/>'
-    toast_xml = (
-        "<toast>"
-        "<visual><binding template=\"ToastGeneric\">"
-        f"<text>{title_xml}</text><text>{body_xml}</text>"
-        "</binding></visual>"
-        f"{audio}"
-        "</toast>"
-    )
-    toast_ps = _powershell_single_quote(toast_xml)
+def _windows_notification_script(title: str, body: str, sound: bool) -> str:
     title_ps = _powershell_single_quote(title)
     body_ps = _powershell_single_quote(body)
+    sound_ps = "$true" if sound else "$false"
     return f"""
-$ErrorActionPreference = 'SilentlyContinue'
+$ErrorActionPreference = 'Stop'
 try {{
-  [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] > $null
-  [Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom.XmlDocument, ContentType = WindowsRuntime] > $null
-  $xml = New-Object Windows.Data.Xml.Dom.XmlDocument
-  $xml.LoadXml({toast_ps})
-  $toast = [Windows.UI.Notifications.ToastNotification]::new($xml)
-  $notifier = [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier('VideoMergingTool')
-  $notifier.Show($toast)
-  Start-Sleep -Milliseconds 500
-  exit 0
-}} catch {{
   Add-Type -AssemblyName System.Windows.Forms
   Add-Type -AssemblyName System.Drawing
   $notify = New-Object System.Windows.Forms.NotifyIcon
@@ -1722,30 +1717,19 @@ try {{
   $notify.BalloonTipTitle = {title_ps}
   $notify.BalloonTipText = {body_ps}
   $notify.Visible = $true
+  if ({sound_ps}) {{ [System.Media.SystemSounds]::Asterisk.Play() }}
   $notify.ShowBalloonTip(5000)
-  if ({'$true' if sound else '$false'}) {{ [System.Media.SystemSounds]::Asterisk.Play() }}
+  [System.Windows.Forms.Application]::DoEvents()
   Start-Sleep -Seconds 6
   $notify.Dispose()
+}} catch {{
+  if ({sound_ps}) {{ [System.Media.SystemSounds]::Asterisk.Play() }}
 }}
 """
 
 
-def _apple_script_quote(value: str) -> str:
-    return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
-
-
 def _powershell_single_quote(value: str) -> str:
     return "'" + value.replace("'", "''") + "'"
-
-
-def _xml_escape(value: str) -> str:
-    return (
-        value.replace("&", "&amp;")
-        .replace("<", "&lt;")
-        .replace(">", "&gt;")
-        .replace('"', "&quot;")
-        .replace("'", "&apos;")
-    )
 
 
 def _build_merge_command(payload: dict[str, object]) -> list[str]:
