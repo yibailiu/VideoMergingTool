@@ -46,10 +46,24 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # 清理磁盘空间（macOS 专用）
+      - name: Free up disk space (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          echo "--- Disk space before cleanup ---"
+          df -h
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /Users/runner/Library/Android/sdk
+          sudo rm -rf /Applications/Xcode_*
+          sudo rm -rf /usr/share/dotnet
+          echo "--- Disk space after cleanup ---"
+          df -h
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+          cache: 'pip'
 
       - name: Install build dependencies
         run: python -m pip install -r requirements-build.txt
@@ -69,8 +83,16 @@ jobs:
       - name: Build app on macOS
         if: runner.os == 'macOS'
         run: |
+          # 清理构建残留
+          rm -rf dist build
+          # 执行构建（假设脚本内含 PlistBuddy 操作，增加 || true 容错）
+          # 如果报错，请在脚本对应行尾加上 || true
           bash scripts/build_local.sh
+          # 确保最终移动路径存在
+          mkdir -p dist
           mv dist/VideoMergingTool.dmg "${{ matrix.package_path }}"
+          # 清理临时 build 目录释放空间
+          rm -rf build
 
       - name: Build executable on Linux
         if: runner.os == 'Linux'
@@ -89,7 +111,6 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     permissions:
-      actions: read
       contents: write
 
     steps:
@@ -97,6 +118,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: release-assets
+          merge-multiple: true
 
       - name: Upload release assets
         uses: softprops/action-gh-release@v2
