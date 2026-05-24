@@ -116,7 +116,9 @@ def gpu_encoder_quality_args(
     fps: float | None = None,
 ) -> list[str]:
     if not encoder:
-        return ["-crf", str(crf), "-preset", preset]
+        return _cpu_encoder_quality_args("libx264", crf, preset)
+    if encoder in {"libx264", "libx265"}:
+        return _cpu_encoder_quality_args(encoder, crf, preset)
     if encoder in {"h264_nvenc", "hevc_nvenc"}:
         return ["-cq", str(crf), "-preset", _nvenc_preset(preset), "-rc", "vbr"]
     if encoder in {"h264_qsv", "hevc_qsv"}:
@@ -134,6 +136,13 @@ def gpu_encoder_quality_args(
     if encoder == "mpeg4":
         return ["-q:v", str(_mpeg4_quality(crf))]
     return ["-crf", str(crf), "-preset", preset]
+
+
+def _cpu_encoder_quality_args(encoder: str, crf: int, preset: str) -> list[str]:
+    args = ["-crf", str(crf), "-preset", preset]
+    if encoder == "libx264":
+        args.extend(["-profile:v", "high"])
+    return args
 
 
 def _candidate_modes(gpu_mode: GpuMode) -> tuple[GpuMode, ...]:

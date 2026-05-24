@@ -41,6 +41,7 @@ CONFIG_FIELD_IDS = [
     "codec",
     "gpu",
     "audioCodec",
+    "qualityProfile",
     "crf",
     "preset",
     "fpsPolicy",
@@ -609,9 +610,11 @@ HTML = r"""<!doctype html>
           <select id="gpu"><option value="off">off</option><option value="auto">auto</option><option value="nvenc">nvenc</option><option value="qsv">qsv</option><option value="amf">amf</option><option value="videotoolbox">videotoolbox (macOS)</option></select>
           <div class="field-label label-micro"><span data-i18n="targetAudioCodec">Target Audio Codec</span> <span class="info" data-tip-i18n="tipAudioCodec">i</span></div>
           <select id="audioCodec"><option value="">Auto majority</option><option>aac</option><option>mp3</option><option>opus</option><option>vorbis</option><option>pcm_s16le</option></select>
+          <div class="field-label label-micro"><span data-i18n="qualityProfile">Quality Profile</span> <span class="info" data-tip-i18n="tipQualityProfile">i</span></div>
+          <select id="qualityProfile"><option value="balanced" data-i18n="qualityBalanced">Balanced</option><option value="high" data-i18n="qualityHigh">High Quality</option><option value="small" data-i18n="qualitySmall">Smaller File</option></select>
           <div class="num-row">
             <div><div class="field-label label-micro"><span data-i18n="crfQuality">CRF (Quality)</span> <span class="info" data-tip-i18n="tipCrf">i</span></div><div class="hint" data-i18n="lowerBetter">Lower = better</div></div>
-            <input id="crf" type="number" min="0" max="51" value="20">
+            <input id="crf" type="number" min="0" max="51" value="23">
           </div>
           <div class="field-label label-micro"><span data-i18n="preset">Preset</span> <span class="info" data-tip-i18n="tipPreset">i</span></div>
           <select id="preset"><option>ultrafast</option><option>superfast</option><option>veryfast</option><option>faster</option><option>fast</option><option selected>medium</option><option>slow</option><option>slower</option><option>veryslow</option></select>
@@ -648,7 +651,7 @@ HTML = r"""<!doctype html>
         fastMerge: "Fast Merge", optimalMerge: "Optimal Merge", extremeMerge: "Extreme Merge", lossless: "Lossless", smart: "Smart", bruteForce: "Brute Force",
         fastDesc: "Stream copy only. Skips incompatible groups.", optimalDesc: "Groups by orientation and transcodes when needed.", extremeDesc: "Normalizes all files into one output.",
         outputFilenamePrefix: "Output Filename Prefix", outputFolder: "Output Folder", tempFolder: "Temp Folder", outputFormat: "Output Format", mergeSortOrder: "Merge Sort Order", targetVideoCodec: "Target Video Codec",
-        gpuAcceleration: "GPU Acceleration", targetAudioCodec: "Target Audio Codec", crfQuality: "CRF (Quality)", lowerBetter: "Lower = better", preset: "Preset",
+        gpuAcceleration: "GPU Acceleration", targetAudioCodec: "Target Audio Codec", qualityProfile: "Quality Profile", qualityBalanced: "Balanced", qualityHigh: "High Quality", qualitySmall: "Smaller File", crfQuality: "CRF (Quality)", lowerBetter: "Lower = better", preset: "Preset",
         fpsPolicy: "FPS Policy", resolutionPolicy: "Resolution Policy", padColor: "Pad Color", ffmpegPath: "FFmpeg Path", ffprobePath: "FFprobe Path",
         recursiveScan: "Recursive Scan", overwrite: "Overwrite", dryRun: "Dry Run", keepTempFiles: "Keep Temp Files", autoDownloadDeps: "Auto Download Deps",
         notifyOnComplete: "Completion Notification", playSoundOnComplete: "Completion Sound",
@@ -673,8 +676,9 @@ HTML = r"""<!doctype html>
         tipSortOrder: "Maps to --sort-by. Controls the scan, preview, preprocessing, and final merge order.",
         tipVideoCodec: "Maps to --video-codec. Leave empty for H.264 by default, or VP9 for webm.",
         tipGpu: "Maps to --gpu. auto chooses the native encoder when available and falls back to CPU when needed.",
-        tipAudioCodec: "Maps to --audio-codec. Leave empty to use majority vote, defaulting to AAC when needed.",
-        tipCrf: "Maps to --crf. Lower means better quality and larger files.",
+        tipAudioCodec: "Maps to --audio-codec. Compatible source audio is copied when possible; incompatible audio is re-encoded only when needed.",
+        tipQualityProfile: "Maps to --quality-profile. balanced uses CRF 23, high uses CRF 20, small uses CRF 25.",
+        tipCrf: "Maps to --crf. Overrides the quality profile. Lower means better quality and larger files.",
         tipPreset: "Maps to --preset. Slower presets usually produce smaller files at the same CRF but take longer.",
         tipFpsPolicy: "Maps to --fps-policy. majority uses the most common FPS; max/min choose the highest/lowest FPS.",
         tipResolutionPolicy: "Maps to --resolution-policy. Currently only largest is supported.",
@@ -696,7 +700,7 @@ HTML = r"""<!doctype html>
         fastMerge: "快速合并", optimalMerge: "智能合并", extremeMerge: "强制合并", lossless: "无损", smart: "智能", bruteForce: "强制",
         fastDesc: "仅使用流复制，跳过不兼容分组。", optimalDesc: "按横竖屏分组，必要时转码。", extremeDesc: "统一所有文件到一个输出。",
         outputFilenamePrefix: "输出文件名前缀", outputFolder: "输出目录", tempFolder: "临时目录", outputFormat: "输出格式", mergeSortOrder: "合并排序方式", targetVideoCodec: "目标视频编码",
-        gpuAcceleration: "GPU 加速", targetAudioCodec: "目标音频编码", crfQuality: "CRF（质量）", lowerBetter: "越低质量越高", preset: "编码预设",
+        gpuAcceleration: "GPU 加速", targetAudioCodec: "目标音频编码", qualityProfile: "质量策略", qualityBalanced: "均衡", qualityHigh: "高质量", qualitySmall: "更小体积", crfQuality: "CRF（质量）", lowerBetter: "越低质量越高", preset: "编码预设",
         fpsPolicy: "帧率策略", resolutionPolicy: "分辨率策略", padColor: "填充颜色", ffmpegPath: "FFmpeg 路径", ffprobePath: "FFprobe 路径",
         recursiveScan: "递归扫描", overwrite: "覆盖输出", dryRun: "试运行", keepTempFiles: "保留临时文件", autoDownloadDeps: "自动下载依赖",
         notifyOnComplete: "完成后提示", playSoundOnComplete: "完成提示音",
@@ -720,8 +724,9 @@ HTML = r"""<!doctype html>
         tipSortOrder: "对应 --sort-by。控制扫描、预览、预处理和最终合并顺序。",
         tipVideoCodec: "对应 --video-codec。留空时默认使用 H.264，webm 输出默认 VP9。",
         tipGpu: "对应 --gpu。auto 会优先选择可用的系统原生编码器，必要时回退 CPU。",
-        tipAudioCodec: "对应 --audio-codec。留空时按多数文件选择，需要时默认 AAC。",
-        tipCrf: "对应 --crf。数值越低质量越高，文件越大。",
+        tipAudioCodec: "对应 --audio-codec。兼容的源音频会尽量复制，只在必要时重编码。",
+        tipQualityProfile: "对应 --quality-profile。均衡使用 CRF 23，高质量使用 CRF 20，更小体积使用 CRF 25。",
+        tipCrf: "对应 --crf。会覆盖质量策略。数值越低质量越高，文件越大。",
         tipPreset: "对应 --preset。更慢的预设通常体积更小，但耗时更长。",
         tipFpsPolicy: "对应 --fps-policy。majority 使用最常见帧率，max/min 选择最高/最低帧率。",
         tipResolutionPolicy: "对应 --resolution-policy。目前仅支持 largest。",
@@ -812,7 +817,7 @@ HTML = r"""<!doctype html>
     }
     function readConfig() {
       const values = { lang: state.lang, mode: state.mode };
-      const ids = ["format", "sortBy", "codec", "gpu", "audioCodec", "crf", "preset", "fpsPolicy", "resolutionPolicy", "padColor", "outputDir", "tempDir", "ffmpegPath", "ffprobePath", "recursive", "overwrite", "dryRun", "keepTemp", "autoDownloadDeps", "notifyOnComplete", "playSoundOnComplete"];
+      const ids = ["format", "sortBy", "codec", "gpu", "audioCodec", "qualityProfile", "crf", "preset", "fpsPolicy", "resolutionPolicy", "padColor", "outputDir", "tempDir", "ffmpegPath", "ffprobePath", "recursive", "overwrite", "dryRun", "keepTemp", "autoDownloadDeps", "notifyOnComplete", "playSoundOnComplete"];
       ids.forEach(id => {
         const node = $(id);
         if (pathFields.includes(id) && node.dataset.custom !== "true") return;
@@ -1045,6 +1050,7 @@ HTML = r"""<!doctype html>
           video_codec: $("codec").value,
           gpu: $("gpu").value,
           audio_codec: $("audioCodec").value,
+          quality_profile: $("qualityProfile").value,
           crf: Number($("crf").value),
           preset: $("preset").value,
           fps_policy: $("fpsPolicy").value,
@@ -1172,7 +1178,18 @@ HTML = r"""<!doctype html>
       if (state.files.length) renderFiles(state.files);
       scheduleSaveConfig();
     });
-    ["format", "sortBy", "codec", "gpu", "audioCodec", "crf", "preset", "fpsPolicy", "resolutionPolicy", "padColor", "outputDir", "tempDir", "ffmpegPath", "ffprobePath", "recursive", "overwrite", "dryRun", "keepTemp", "autoDownloadDeps", "notifyOnComplete", "playSoundOnComplete"].forEach(id => {
+    const qualityDefaults = {
+      balanced: { crf: 23, preset: "medium" },
+      high: { crf: 20, preset: "slow" },
+      small: { crf: 25, preset: "medium" }
+    };
+    $("qualityProfile").addEventListener("change", () => {
+      const defaults = qualityDefaults[$("qualityProfile").value] || qualityDefaults.balanced;
+      $("crf").value = defaults.crf;
+      $("preset").value = defaults.preset;
+      scheduleSaveConfig();
+    });
+    ["format", "sortBy", "codec", "gpu", "audioCodec", "qualityProfile", "crf", "preset", "fpsPolicy", "resolutionPolicy", "padColor", "outputDir", "tempDir", "ffmpegPath", "ffprobePath", "recursive", "overwrite", "dryRun", "keepTemp", "autoDownloadDeps", "notifyOnComplete", "playSoundOnComplete"].forEach(id => {
       const node = $(id);
       if (pathFields.includes(id)) {
         node.addEventListener("input", () => {
@@ -1752,7 +1769,9 @@ def _build_merge_command(payload: dict[str, object]) -> list[str]:
         cmd.extend(["--gpu", str(payload["gpu"])])
     if payload.get("audio_codec"):
         cmd.extend(["--audio-codec", str(payload["audio_codec"])])
-    cmd.extend(["--crf", str(payload.get("crf") or 20)])
+    if payload.get("quality_profile"):
+        cmd.extend(["--quality-profile", str(payload["quality_profile"])])
+    cmd.extend(["--crf", str(payload.get("crf") or 23)])
     if payload.get("preset"):
         cmd.extend(["--preset", str(payload["preset"])])
     if payload.get("fps_policy"):

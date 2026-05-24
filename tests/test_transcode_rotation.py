@@ -6,7 +6,15 @@ from pathlib import Path
 from unittest.mock import patch
 
 from videomerge.models import Canvas, CodecPlan, Orientation, ToolPaths, VideoFile
-from videomerge.transcode import build_video_filter, preprocess_file, validate_preprocessed_output
+from videomerge.transcode import (
+    AudioTarget,
+    build_video_filter,
+    choose_audio_action,
+    choose_audio_target,
+    choose_video_action,
+    preprocess_file,
+    validate_preprocessed_output,
+)
 
 
 class TranscodeRotationTests(unittest.TestCase):
@@ -99,6 +107,71 @@ class TranscodeRotationTests(unittest.TestCase):
                 logging.getLogger("test"),
             )
 
+    def test_compatible_file_skips_transcode_and_uses_original_path(self) -> None:
+        file = _plain_video()
+
+        with patch("videomerge.transcode.run_command") as run:
+            output = preprocess_file(
+                file=file,
+                output_path=Path("out.mp4"),
+                canvas=Canvas(1280, 720),
+                fps=30.0,
+                codec_plan=CodecPlan("h264", "aac", "libx264", "aac"),
+                tools=ToolPaths(ffmpeg=Path("ffmpeg"), ffprobe=Path("ffprobe")),
+                logger=logging.getLogger("test"),
+                pad_color="black",
+                crf=23,
+                preset="medium",
+                dry_run=True,
+                audio_target=AudioTarget("aac", "aac", 48000, 2, "128k"),
+            )
+
+        self.assertEqual(output, file.path)
+        run.assert_not_called()
+
+    def test_audio_only_reencode_copies_video(self) -> None:
+        captured_args = []
+        file = _plain_video().__class__(**{**_plain_video().__dict__, "audio_sample_rate": 44100})
+
+        def fake_run_command(args, logger, dry_run=False):  # type: ignore[no-untyped-def]
+            captured_args.extend(args)
+
+        with patch("videomerge.transcode.run_command", side_effect=fake_run_command):
+            preprocess_file(
+                file=file,
+                output_path=Path("out.mp4"),
+                canvas=Canvas(1280, 720),
+                fps=30.0,
+                codec_plan=CodecPlan("h264", "aac", "libx264", "aac"),
+                tools=ToolPaths(ffmpeg=Path("ffmpeg"), ffprobe=Path("ffprobe")),
+                logger=logging.getLogger("test"),
+                pad_color="black",
+                crf=23,
+                preset="medium",
+                dry_run=True,
+                audio_target=AudioTarget("aac", "aac", 48000, 2, "128k"),
+            )
+
+        self.assertEqual(captured_args[captured_args.index("-c:v") + 1], "copy")
+        self.assertEqual(captured_args[captured_args.index("-c:a") + 1], "aac")
+        self.assertNotIn("-vf", captured_args)
+
+    def test_choose_audio_target_uses_source_shape_and_caps_mono_bitrate(self) -> None:
+        file = _plain_video().__class__(**{**_plain_video().__dict__, "audio_channels": 1, "audio_bitrate": 160000})
+
+        target = choose_audio_target([file], CodecPlan("h264", "aac", "libx264", "aac"))
+
+        self.assertEqual(target.channels, 1)
+        self.assertEqual(target.sample_rate, 48000)
+        self.assertEqual(target.bitrate, "96k")
+
+    def test_action_helpers_detect_video_and_audio_copy(self) -> None:
+        file = _plain_video()
+        audio_target = AudioTarget("aac", "aac", 48000, 2, "128k")
+
+        self.assertEqual(choose_video_action(file, Canvas(1280, 720), 30.0, CodecPlan("h264", "aac", "libx264", "aac")), "copy")
+        self.assertEqual(choose_audio_action(file, audio_target), "copy")
+
 
 if __name__ == "__main__":
     unittest.main()
@@ -122,4 +195,29 @@ def _rotated_video() -> VideoFile:
         has_audio=True,
         orientation=Orientation.portrait,
         rotation=90,
+    )
+
+
+def _plain_video() -> VideoFile:
+    return VideoFile(
+        path=Path("plain.mp4"),
+        container="mp4",
+        video_codec="h264",
+        audio_codec="aac",
+        width=1280,
+        height=720,
+        display_width=1280,
+        display_height=720,
+        aspect_ratio="1280:720",
+        frame_rate="30/1",
+        frame_rate_float=30.0,
+        pixel_format="yuv420p",
+        duration=10.0,
+        has_audio=True,
+        orientation=Orientation.landscape,
+        rotation=0,
+        video_bitrate=2_000_000,
+        audio_bitrate=128_000,
+        audio_sample_rate=48000,
+        audio_channels=2,
     )

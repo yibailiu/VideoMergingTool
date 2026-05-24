@@ -43,6 +43,10 @@ class VideoFile:
     has_audio: bool
     orientation: Orientation
     rotation: int
+    video_bitrate: int = 0
+    audio_bitrate: int = 0
+    audio_sample_rate: int = 0
+    audio_channels: int = 0
 
     @property
     def stem_safe(self) -> str:

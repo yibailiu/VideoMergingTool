@@ -59,8 +59,9 @@ def merge(
     resolution_policy: str = typer.Option("largest", "--resolution-policy", help="Currently supports largest."),
     video_codec: Optional[str] = typer.Option(None, "--video-codec", help="Override target video codec."),
     audio_codec: Optional[str] = typer.Option(None, "--audio-codec", help="Override target audio codec."),
-    crf: int = typer.Option(20, "--crf", min=0, max=51, help="Video CRF for transcode modes."),
-    preset: str = typer.Option("medium", "--preset", help="FFmpeg encoder preset."),
+    quality_profile: str = typer.Option("balanced", "--quality-profile", help="Quality profile: balanced, high, or small."),
+    crf: Optional[int] = typer.Option(None, "--crf", min=0, max=51, help="Video CRF for transcode modes. Overrides --quality-profile."),
+    preset: Optional[str] = typer.Option(None, "--preset", help="FFmpeg encoder preset. Overrides --quality-profile."),
     gpu: GpuMode = typer.Option(GpuMode.off, "--gpu", help="GPU acceleration: off, auto, nvenc, qsv, amf, videotoolbox."),
     ffmpeg_path: Optional[Path] = typer.Option(None, "--ffmpeg-path", help="Explicit ffmpeg path."),
     ffprobe_path: Optional[Path] = typer.Option(None, "--ffprobe-path", help="Explicit ffprobe path."),
@@ -81,7 +82,9 @@ def merge(
     logger = setup_logging(log_file=log_file, verbose=verbose)
 
     try:
-        _validate_cli(input_dir, output_format, fps_policy, resolution_policy, sort_by, temp_dir)
+        _validate_cli(input_dir, output_format, fps_policy, resolution_policy, sort_by, quality_profile, temp_dir)
+        quality = _resolve_quality_settings(quality_profile, crf, preset)
+        logger.info("Quality profile: %s | crf=%d preset=%s", quality_profile, quality["crf"], quality["preset"])
         out_dir = prepare_output_dir(input_dir, output_dir)
         if temp_dir:
             temp_dir.mkdir(parents=True, exist_ok=True)
@@ -141,8 +144,8 @@ def merge(
                 fps_policy=fps_policy,
                 video_codec=video_codec,
                 audio_codec=audio_codec,
-                crf=crf,
-                preset=preset,
+                crf=int(quality["crf"]),
+                preset=str(quality["preset"]),
                 gpu=gpu,
                 temp_dir=temp_dir,
                 progress=progress,
@@ -163,8 +166,8 @@ def merge(
                 fps_policy=fps_policy,
                 video_codec=video_codec,
                 audio_codec=audio_codec,
-                crf=crf,
-                preset=preset,
+                crf=int(quality["crf"]),
+                preset=str(quality["preset"]),
                 gpu=gpu,
                 temp_dir=temp_dir,
                 progress=progress,
@@ -217,6 +220,7 @@ def _validate_cli(
     fps_policy: str,
     resolution_policy: str,
     sort_by: str,
+    quality_profile: str,
     temp_dir: Path | None = None,
 ) -> None:
     if not input_dir.exists():
@@ -231,8 +235,24 @@ def _validate_cli(
         raise VideoMergeError("Only --resolution-policy largest is currently supported.")
     if sort_by not in SORT_OPTIONS:
         raise VideoMergeError(f"Invalid --sort-by. Use one of: {', '.join(sorted(SORT_OPTIONS))}.")
+    if quality_profile not in {"balanced", "high", "small"}:
+        raise VideoMergeError("Invalid --quality-profile. Use balanced, high, or small.")
     if temp_dir and temp_dir.exists() and not temp_dir.is_dir():
         raise VideoMergeError(f"Temp path is not a directory: {temp_dir}")
+
+
+def _resolve_quality_settings(quality_profile: str, crf: int | None, preset: str | None) -> dict[str, object]:
+    defaults = {
+        "high": {"crf": 20, "preset": "slow"},
+        "balanced": {"crf": 23, "preset": "medium"},
+        "small": {"crf": 25, "preset": "medium"},
+    }
+    selected = defaults[quality_profile].copy()
+    if crf is not None:
+        selected["crf"] = crf
+    if preset is not None:
+        selected["preset"] = preset
+    return selected
 
 
 def _load_selected_video_files(selected_files: Path, input_dir: Path) -> list[Path]:

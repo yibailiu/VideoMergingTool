@@ -57,6 +57,10 @@ def probe_file(path: Path, tools: ToolPaths, logger: logging.Logger) -> VideoFil
     orientation = _orientation(display_width, display_height)
     frame_rate = video_stream.get("avg_frame_rate") or video_stream.get("r_frame_rate") or "0/0"
     duration = _read_duration(payload, video_stream)
+    video_bitrate = _read_int(video_stream.get("bit_rate")) or _read_int(payload.get("format", {}).get("bit_rate"))
+    audio_bitrate = _read_int(audio_stream.get("bit_rate")) if audio_stream else 0
+    audio_sample_rate = _read_int(audio_stream.get("sample_rate")) if audio_stream else 0
+    audio_channels = _read_int(audio_stream.get("channels")) if audio_stream else 0
 
     file = VideoFile(
         path=path,
@@ -75,6 +79,10 @@ def probe_file(path: Path, tools: ToolPaths, logger: logging.Logger) -> VideoFil
         has_audio=audio_stream is not None,
         orientation=orientation,
         rotation=rotation,
+        video_bitrate=video_bitrate,
+        audio_bitrate=audio_bitrate,
+        audio_sample_rate=audio_sample_rate,
+        audio_channels=audio_channels,
     )
     logger.debug("Probed %s: %s", path, file)
     return file
@@ -88,7 +96,7 @@ def probe_files(paths: list[Path], tools: ToolPaths, logger: logging.Logger) -> 
             file = probe_file(path, tools, logger)
             results.append(file)
             logger.info(
-                "Media: %s | %s %dx%d display=%dx%d fps=%s pix=%s audio=%s duration=%.2fs rotation=%d",
+                "Media: %s | %s %dx%d display=%dx%d fps=%s pix=%s audio=%s/%sHz/%sch bitrate=%dk/%dk duration=%.2fs rotation=%d",
                 path.name,
                 file.video_codec,
                 file.width,
@@ -98,6 +106,10 @@ def probe_files(paths: list[Path], tools: ToolPaths, logger: logging.Logger) -> 
                 file.frame_rate,
                 file.pixel_format,
                 file.audio_codec or "none",
+                file.audio_sample_rate or "-",
+                file.audio_channels or "-",
+                round(file.video_bitrate / 1000),
+                round(file.audio_bitrate / 1000),
                 file.duration,
                 file.rotation,
             )
@@ -113,6 +125,13 @@ def _read_duration(payload: dict[str, Any], video_stream: dict[str, Any]) -> flo
         return float(raw)
     except (TypeError, ValueError):
         return 0.0
+
+
+def _read_int(value: object) -> int:
+    try:
+        return int(float(value))
+    except (TypeError, ValueError):
+        return 0
 
 
 def _read_rotation(video_stream: dict[str, Any]) -> int:

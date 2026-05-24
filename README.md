@@ -88,9 +88,10 @@ Windows 和 macOS 安装包已经内置 FFmpeg / FFprobe，普通用户不需要
 | Dry Run / 试运行 | `--dry-run` | 只显示计划执行的操作，不真正调用 FFmpeg。 |
 | GPU Acceleration / GPU 加速 | `--gpu off\|auto\|nvenc\|qsv\|amf\|videotoolbox` | 可用时使用硬件编码。`auto` 更方便，`off` 兼容性最好。 |
 | Target Video Codec / 目标视频编码 | `--video-codec TEXT` | 指定输出视频编码。默认使用 H.264，WebM 输出默认 VP9。 |
-| Target Audio Codec / 目标音频编码 | `--audio-codec TEXT` | 指定输出音频编码。普通用户建议保持默认。 |
-| Quality / 质量 | `--crf 0-51` | 控制转码质量。数值越低通常质量越高、文件越大。默认值是 `20`。 |
-| Encoder Preset / 编码预设 | `--preset TEXT` | 控制编码速度和压缩效率。默认 `medium` 兼顾速度和体积。 |
+| Target Audio Codec / 目标音频编码 | `--audio-codec TEXT` | 指定输出音频编码。兼容源音频会尽量复制，只在必要时重编码。 |
+| Quality Profile / 质量策略 | `--quality-profile balanced\|high\|small` | 选择体积、清晰度和速度策略。默认 `balanced`。 |
+| Quality / 质量 | `--crf 0-51` | 覆盖质量策略的 CRF。数值越低通常质量越高、文件越大。默认均衡策略是 `23`。 |
+| Encoder Preset / 编码预设 | `--preset TEXT` | 覆盖质量策略的编码预设。默认均衡策略是 `medium`。 |
 | FPS Policy / 帧率策略 | `--fps-policy majority\|max\|min` | 转码模式下选择目标帧率。通常使用 `majority`。 |
 | Padding Color / 补边颜色 | `--pad-color TEXT` | 需要补边时使用的颜色，默认 `black`。 |
 | FFmpeg Path / FFmpeg 路径 | `--ffmpeg-path PATH` | 手动指定 `ffmpeg` 路径。安装包通常会使用内置版本。 |

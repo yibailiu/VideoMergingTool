@@ -27,6 +27,13 @@ class GuiGpuTests(unittest.TestCase):
         self.assertIn("--sort-by", command)
         self.assertEqual(command[command.index("--sort-by") + 1], "modified-desc")
 
+    def test_gui_command_includes_quality_profile(self) -> None:
+        command = _build_merge_command({"input_dir": "/tmp/in", "quality_profile": "small", "crf": 25})
+
+        self.assertIn("--quality-profile", command)
+        self.assertEqual(command[command.index("--quality-profile") + 1], "small")
+        self.assertEqual(command[command.index("--crf") + 1], "25")
+
     def test_gui_command_writes_selected_file_list(self) -> None:
         command = _build_merge_command({"input_dir": "/tmp/in", "selected_files": ["/tmp/in/a.mp4", "/tmp/in/b.mp4"]})
         try:

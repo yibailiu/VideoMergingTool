@@ -4,7 +4,7 @@ import logging
 import unittest
 from pathlib import Path
 
-from videomerge.cli import _container_adjusted_plan, _default_transcode_video_codec
+from videomerge.cli import _container_adjusted_plan, _default_transcode_video_codec, _resolve_quality_settings
 from videomerge.grouping import majority_codec_plan
 from videomerge.models import Orientation, VideoFile
 
@@ -51,6 +51,14 @@ class CodecPlanTests(unittest.TestCase):
         self.assertEqual(adjusted.output_video_encoder, "libvpx-vp9")
         self.assertEqual(adjusted.audio_codec, "opus")
         self.assertEqual(adjusted.output_audio_encoder, "libopus")
+
+    def test_quality_profile_defaults(self) -> None:
+        self.assertEqual(_resolve_quality_settings("balanced", None, None), {"crf": 23, "preset": "medium"})
+        self.assertEqual(_resolve_quality_settings("high", None, None), {"crf": 20, "preset": "slow"})
+        self.assertEqual(_resolve_quality_settings("small", None, None), {"crf": 25, "preset": "medium"})
+
+    def test_explicit_crf_and_preset_override_quality_profile(self) -> None:
+        self.assertEqual(_resolve_quality_settings("balanced", 18, "veryslow"), {"crf": 18, "preset": "veryslow"})
 
 
 def _video(name: str, codec: str) -> VideoFile:

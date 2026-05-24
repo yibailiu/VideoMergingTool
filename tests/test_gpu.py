@@ -31,7 +31,7 @@ class GpuTests(unittest.TestCase):
     def test_cpu_h264_quality_args_use_crf(self) -> None:
         args = gpu_encoder_quality_args("libx264", 18, "slow")
 
-        self.assertEqual(args, ["-crf", "18", "-preset", "slow"])
+        self.assertEqual(args, ["-crf", "18", "-preset", "slow", "-profile:v", "high"])
 
     def test_mpeg4_quality_args_use_qscale_not_crf(self) -> None:
         args = gpu_encoder_quality_args("mpeg4", 10, "medium")

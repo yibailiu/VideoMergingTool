@@ -88,9 +88,10 @@ Most users can use the desktop controls without typing any command. The table be
 | Dry Run | `--dry-run` | Shows the planned work without actually running FFmpeg. |
 | GPU Acceleration | `--gpu off\|auto\|nvenc\|qsv\|amf\|videotoolbox` | Uses hardware encoding when available. `auto` is convenient; `off` is safest for compatibility. |
 | Target Video Codec | `--video-codec TEXT` | Overrides the output video codec. Leave default for H.264, or VP9 when output format is WebM. |
-| Target Audio Codec | `--audio-codec TEXT` | Overrides the output audio codec. Leave default unless your playback device requires a specific codec. |
-| Quality | `--crf 0-51` | Controls transcode quality. Lower values usually mean better quality and larger files. Default is `20`. |
-| Encoder Preset | `--preset TEXT` | Controls encoding speed and compression. `medium` is the default balance. |
+| Target Audio Codec | `--audio-codec TEXT` | Overrides the output audio codec. Compatible source audio is copied when possible and re-encoded only when needed. |
+| Quality Profile | `--quality-profile balanced\|high\|small` | Selects the size, clarity, and speed strategy. Default is `balanced`. |
+| Quality | `--crf 0-51` | Overrides the quality profile CRF. Lower values usually mean better quality and larger files. Balanced defaults to `23`. |
+| Encoder Preset | `--preset TEXT` | Overrides the quality profile encoder preset. Balanced defaults to `medium`. |
 | FPS Policy | `--fps-policy majority\|max\|min` | Chooses the target frame rate for transcode modes. `majority` is usually best. |
 | Padding Color | `--pad-color TEXT` | Color used when the app needs to add borders instead of cropping the image. Default is `black`. |
 | FFmpeg Path | `--ffmpeg-path PATH` | Optional manual path to `ffmpeg`. Packaged apps normally use the bundled copy. |
