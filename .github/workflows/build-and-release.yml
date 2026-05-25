@@ -2,7 +2,6 @@ name: Build and Release
 
 on:
   push:
-    # 更新了触发工作流的分支
     branches:
       - main
       - beta
@@ -24,35 +23,37 @@ env:
   VIDEOMERGE_FFMPEG_LINUX_SHA256: ${{ vars.VIDEOMERGE_FFMPEG_LINUX_SHA256 }}
 
 jobs:
+  # 新增：前置任务，用于动态生成矩阵
+  setup-matrix:
+    name: Setup Build Matrix
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+    steps:
+      - name: Determine Matrix based on Branch
+        id: set-matrix
+        run: |
+          # 默认：全平台打包 (适用于 main, tags, workflow_dispatch)
+          MATRIX_JSON='[{"os":"windows-latest","label":"windows-x64","artifact_name":"VideoMergingTool-windows-x64","package_path":"dist/installer/VideoMergingTool-Setup.exe"},{"os":"macos-15-intel","label":"macos-intel","artifact_name":"VideoMergingTool-macos-intel","package_path":"dist/VideoMergingTool-macos-intel.dmg"},{"os":"macos-14","label":"macos-apple-silicon","artifact_name":"VideoMergingTool-macos-apple-silicon","package_path":"dist/VideoMergingTool-macos-apple-silicon.dmg"},{"os":"ubuntu-latest","label":"linux-x64","artifact_name":"VideoMergingTool-linux-x64","package_path":"dist/VideoMergingTool"}]'
+
+          if [[ "${{ github.ref }}" == "refs/heads/beta" ]]; then
+            # beta 分支：仅 Windows 和 macOS apple 芯片
+            MATRIX_JSON='[{"os":"windows-latest","label":"windows-x64","artifact_name":"VideoMergingTool-windows-x64","package_path":"dist/installer/VideoMergingTool-Setup.exe"},{"os":"macos-14","label":"macos-apple-silicon","artifact_name":"VideoMergingTool-macos-apple-silicon","package_path":"dist/VideoMergingTool-macos-apple-silicon.dmg"}]'
+          elif [[ "${{ github.ref }}" == "refs/heads/dev" ]]; then
+            # dev 分支：仅 Windows
+            MATRIX_JSON='[{"os":"windows-latest","label":"windows-x64","artifact_name":"VideoMergingTool-windows-x64","package_path":"dist/installer/VideoMergingTool-Setup.exe"}]'
+          fi
+
+          echo "matrix={\"include\":$MATRIX_JSON}" >> $GITHUB_OUTPUT
+
   build:
     name: Build ${{ matrix.label }}
+    needs: setup-matrix # 依赖 setup-matrix 任务
     runs-on: ${{ matrix.os }}
-    # 核心修改：根据触发的分支/Tag 决定是否执行当前矩阵任务
-    if: >
-      startsWith(github.ref, 'refs/tags/v') ||
-      github.ref == 'refs/heads/main' ||
-      (github.ref == 'refs/heads/beta' && (matrix.label == 'windows-x64' || matrix.label == 'macos-apple-silicon')) ||
-      (github.ref == 'refs/heads/dev' && matrix.label == 'windows-x64')
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - os: windows-latest
-            label: windows-x64
-            artifact_name: VideoMergingTool-windows-x64
-            package_path: dist/installer/VideoMergingTool-Setup.exe
-          - os: macos-15-intel
-            label: macos-intel
-            artifact_name: VideoMergingTool-macos-intel
-            package_path: dist/VideoMergingTool-macos-intel.dmg
-          - os: macos-14
-            label: macos-apple-silicon
-            artifact_name: VideoMergingTool-macos-apple-silicon
-            package_path: dist/VideoMergingTool-macos-apple-silicon.dmg
-          - os: ubuntu-latest
-            label: linux-x64
-            artifact_name: VideoMergingTool-linux-x64
-            package_path: dist/VideoMergingTool
+      # 核心修改：读取前置任务输出的 JSON 动态生成矩阵
+      matrix: ${{ fromJSON(needs.setup-matrix.outputs.matrix) }}
 
     steps:
       - name: Checkout
