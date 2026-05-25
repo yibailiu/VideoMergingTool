@@ -2,7 +2,10 @@ name: Build and Release
 
 on:
   push:
+    # 更新了触发工作流的分支
     branches:
+      - main
+      - beta
       - dev
     tags:
       - "v*"
@@ -14,7 +17,7 @@ permissions:
 env:
   # 提前启用 Node.js 24，消除 action 依赖 Node 20 的弃用警告
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-  
+
   VIDEOMERGE_FFMPEG_DARWIN_SHA256: ${{ vars.VIDEOMERGE_FFMPEG_DARWIN_SHA256 }}
   VIDEOMERGE_FFPROBE_DARWIN_SHA256: ${{ vars.VIDEOMERGE_FFPROBE_DARWIN_SHA256 }}
   VIDEOMERGE_FFMPEG_WINDOWS_SHA256: ${{ vars.VIDEOMERGE_FFMPEG_WINDOWS_SHA256 }}
@@ -24,6 +27,12 @@ jobs:
   build:
     name: Build ${{ matrix.label }}
     runs-on: ${{ matrix.os }}
+    # 核心修改：根据触发的分支/Tag 决定是否执行当前矩阵任务
+    if: >
+      startsWith(github.ref, 'refs/tags/v') ||
+      github.ref == 'refs/heads/main' ||
+      (github.ref == 'refs/heads/beta' && (matrix.label == 'windows-x64' || matrix.label == 'macos-apple-silicon')) ||
+      (github.ref == 'refs/heads/dev' && matrix.label == 'windows-x64')
     strategy:
       fail-fast: false
       matrix:
@@ -67,7 +76,7 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-          cache: 'pip'
+          cache: "pip"
 
       - name: Install build dependencies
         run: python -m pip install -r requirements-build.txt
