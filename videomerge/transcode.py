@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import logging
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Callable
 
 from .errors import CommandError, ProbeError
 from .gpu import GpuPlan, gpu_encoder_quality_args
+from .merge import concat_copy
+from .models import MergeMode
 from .models import Canvas, CodecPlan, ToolPaths, VideoFile
 from .probe import probe_file
 from .utils import run_command
@@ -20,6 +22,12 @@ class AudioTarget:
     sample_rate: int
     channels: int
     bitrate: str
+
+
+@dataclass(frozen=True)
+class PreprocessSegment:
+    files: list[VideoFile]
+    copy_compatible: bool
 
 
 def preprocess_group(
@@ -53,33 +61,119 @@ def preprocess_group(
         audio_target.channels,
         audio_target.bitrate,
     )
+    if can_concat_originals(files, canvas, fps, codec_plan, audio_target):
+        logger.info("Preprocess decision: copy originals for entire group | all streams are concat-compatible.")
+        for file in files:
+            if progress_callback:
+                progress_callback(file)
+        return [file.path for file in files], None
 
+    segments = build_preprocess_segments(files, canvas, fps, codec_plan, audio_target)
+    logger.info("Preprocess segmentation: %d segment(s) for %d file(s).", len(segments), len(files))
     outputs: list[Path] = []
-    for index, file in enumerate(files, start=1):
-        output_path = temp_dir / f"{index:04d}_{file.stem_safe}.mp4"
-        processed_path = preprocess_file(
-            file=file,
-            output_path=output_path,
-            canvas=canvas,
-            fps=fps,
-            codec_plan=codec_plan,
-            audio_target=audio_target,
-            tools=tools,
-            logger=logger,
-            pad_color=pad_color,
-            crf=crf,
-            preset=preset,
-            dry_run=dry_run,
-            gpu_plan=gpu_plan,
-        )
+    for index, segment in enumerate(segments, start=1):
+        output_path = temp_dir / f"{index:04d}_{segment.files[0].stem_safe}.mp4"
+        if segment.copy_compatible:
+            processed_path = preprocess_copy_segment(
+                segment=segment,
+                output_path=output_path,
+                temp_dir=temp_dir,
+                index=index,
+                canvas=canvas,
+                fps=fps,
+                codec_plan=codec_plan,
+                audio_target=audio_target,
+                tools=tools,
+                logger=logger,
+                pad_color=pad_color,
+                crf=crf,
+                preset=preset,
+                dry_run=dry_run,
+                gpu_plan=gpu_plan,
+            )
+        else:
+            processed_path = preprocess_file(
+                file=segment.files[0],
+                output_path=output_path,
+                canvas=canvas,
+                fps=fps,
+                codec_plan=codec_plan,
+                audio_target=audio_target,
+                tools=tools,
+                logger=logger,
+                pad_color=pad_color,
+                crf=crf,
+                preset=preset,
+                dry_run=dry_run,
+                gpu_plan=gpu_plan,
+                force_video_transcode=True,
+            )
         outputs.append(processed_path)
         if progress_callback:
-            progress_callback(file)
+            for file in segment.files:
+                progress_callback(file)
 
     if keep_temp:
         logger.info("Keeping temp files in %s", temp_dir)
         return outputs, None
     return outputs, temp_owner
+
+
+def preprocess_copy_segment(
+    segment: PreprocessSegment,
+    output_path: Path,
+    temp_dir: Path,
+    index: int,
+    canvas: Canvas,
+    fps: float,
+    codec_plan: CodecPlan,
+    audio_target: AudioTarget,
+    tools: ToolPaths,
+    logger: logging.Logger,
+    pad_color: str,
+    crf: int,
+    preset: str,
+    dry_run: bool,
+    gpu_plan: GpuPlan | None = None,
+) -> Path:
+    first = segment.files[0]
+    source_path = first.path
+    if len(segment.files) > 1:
+        source_path = temp_dir / f"{index:04d}_copy_segment.mp4"
+        logger.info(
+            "Preprocess decision: stream-copy %d ready file(s) into segment before one normalization pass.",
+            len(segment.files),
+        )
+        concat_copy(
+            files=[file.path for file in segment.files],
+            output_path=source_path,
+            tools=tools,
+            logger=logger,
+            mode=MergeMode.optimal,
+            overwrite=True,
+            dry_run=dry_run,
+            temp_root=temp_dir,
+        )
+    else:
+        logger.info("Preprocess decision: normalize single ready file as its own safe segment: %s", first.path.name)
+
+    segment_file = replace(first, path=source_path, duration=sum(file.duration for file in segment.files))
+    return preprocess_file(
+        file=segment_file,
+        output_path=output_path,
+        canvas=canvas,
+        fps=fps,
+        codec_plan=codec_plan,
+        audio_target=audio_target,
+        tools=tools,
+        logger=logger,
+        pad_color=pad_color,
+        crf=crf,
+        preset=preset,
+        dry_run=dry_run,
+        gpu_plan=gpu_plan,
+        force_video_transcode=True,
+    )
 
 
 def preprocess_file(
@@ -96,18 +190,21 @@ def preprocess_file(
     dry_run: bool,
     gpu_plan: GpuPlan | None = None,
     audio_target: AudioTarget | None = None,
+    force_video_transcode: bool = False,
 ) -> Path:
     audio_target = audio_target or choose_audio_target([file], codec_plan)
     video_action = choose_video_action(file, canvas, fps, codec_plan)
+    if force_video_transcode:
+        video_action = "transcode"
     audio_action = choose_audio_action(file, audio_target)
-    if video_action == "copy" and audio_action == "copy" and _is_concat_safe_source(file):
+    if not force_video_transcode and video_action == "copy" and audio_action == "copy" and _is_concat_safe_source(file):
         logger.info(
             "Preprocess decision: copy original %s | video/audio already match target.",
             file.path.name,
         )
         return file.path
 
-    if video_action == "copy" and audio_action == "copy":
+    if not force_video_transcode and video_action == "copy" and audio_action == "copy":
         logger.info("Preprocess decision: remux %s -> %s | codecs already match.", file.path.name, output_path.name)
         remux_copy(file, output_path, tools, logger, dry_run)
         return output_path
@@ -234,6 +331,73 @@ def choose_video_action(file: VideoFile, canvas: Canvas, fps: float, codec_plan:
     if _normalize_video_codec(file.video_codec) != _normalize_video_codec(codec_plan.video_codec):
         return "transcode"
     return "copy"
+
+
+def can_concat_originals(
+    files: list[VideoFile],
+    canvas: Canvas,
+    fps: float,
+    codec_plan: CodecPlan,
+    audio_target: AudioTarget,
+) -> bool:
+    if not files:
+        return False
+    if not all(_is_concat_safe_source(file) for file in files):
+        return False
+    if not all(choose_video_action(file, canvas, fps, codec_plan) == "copy" for file in files):
+        return False
+    if not all(choose_audio_action(file, audio_target) == "copy" for file in files):
+        return False
+    first = _concat_signature(files[0])
+    return all(_concat_signature(file) == first for file in files[1:])
+
+
+def build_preprocess_segments(
+    files: list[VideoFile],
+    canvas: Canvas,
+    fps: float,
+    codec_plan: CodecPlan,
+    audio_target: AudioTarget,
+) -> list[PreprocessSegment]:
+    segments: list[PreprocessSegment] = []
+    current: list[VideoFile] = []
+
+    def flush_current() -> None:
+        nonlocal current
+        if current:
+            segments.append(PreprocessSegment(files=current, copy_compatible=True))
+            current = []
+
+    for file in files:
+        copy_ready = (
+            _is_concat_safe_source(file)
+            and choose_video_action(file, canvas, fps, codec_plan) == "copy"
+            and choose_audio_action(file, audio_target) == "copy"
+        )
+        if not copy_ready:
+            flush_current()
+            segments.append(PreprocessSegment(files=[file], copy_compatible=False))
+            continue
+        if current and _concat_signature(file) != _concat_signature(current[0]):
+            flush_current()
+        current.append(file)
+
+    flush_current()
+    return segments
+
+
+def _concat_signature(file: VideoFile) -> tuple[object, ...]:
+    return (
+        _normalize_video_codec(file.video_codec),
+        _normalize_audio_codec(file.audio_codec or ""),
+        file.display_width,
+        file.display_height,
+        file.frame_rate,
+        file.pixel_format,
+        file.rotation,
+        file.audio_sample_rate,
+        file.audio_channels,
+    )
 
 
 def choose_audio_action(file: VideoFile, audio_target: AudioTarget) -> str:

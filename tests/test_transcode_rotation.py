@@ -8,10 +8,13 @@ from unittest.mock import patch
 from videomerge.models import Canvas, CodecPlan, Orientation, ToolPaths, VideoFile
 from videomerge.transcode import (
     AudioTarget,
+    build_preprocess_segments,
     build_video_filter,
+    can_concat_originals,
     choose_audio_action,
     choose_audio_target,
     choose_video_action,
+    preprocess_group,
     preprocess_file,
     validate_preprocessed_output,
 )
@@ -55,7 +58,9 @@ class TranscodeRotationTests(unittest.TestCase):
             rotation=90,
         )
 
-        with patch("videomerge.transcode.run_command", side_effect=fake_run_command):
+        with patch("videomerge.transcode.run_command", side_effect=fake_run_command), patch(
+            "videomerge.merge.run_command", side_effect=fake_run_command
+        ):
             preprocess_file(
                 file=file,
                 output_path=Path("out.mp4"),
@@ -171,6 +176,121 @@ class TranscodeRotationTests(unittest.TestCase):
 
         self.assertEqual(choose_video_action(file, Canvas(1280, 720), 30.0, CodecPlan("h264", "aac", "libx264", "aac")), "copy")
         self.assertEqual(choose_audio_action(file, audio_target), "copy")
+
+    def test_group_only_uses_originals_when_all_files_have_same_concat_signature(self) -> None:
+        first = _plain_video()
+        second = _plain_video().__class__(**{**_plain_video().__dict__, "path": Path("second.mp4")})
+        audio_target = AudioTarget("aac", "aac", 48000, 2, "128k")
+
+        self.assertTrue(
+            can_concat_originals(
+                [first, second],
+                Canvas(1280, 720),
+                30.0,
+                CodecPlan("h264", "aac", "libx264", "aac"),
+                audio_target,
+            )
+        )
+
+    def test_group_rejects_original_copy_when_concat_signature_differs(self) -> None:
+        first = _plain_video()
+        second = _plain_video().__class__(**{**_plain_video().__dict__, "path": Path("second.mp4"), "frame_rate": "30000/1001", "frame_rate_float": 29.97})
+        audio_target = AudioTarget("aac", "aac", 48000, 2, "128k")
+
+        self.assertFalse(
+            can_concat_originals(
+                [first, second],
+                Canvas(1280, 720),
+                30.0,
+                CodecPlan("h264", "aac", "libx264", "aac"),
+                audio_target,
+            )
+        )
+
+    def test_preprocess_group_uses_safe_segments_when_any_file_needs_normalization(self) -> None:
+        captured_commands = []
+        first = _plain_video()
+        second = _plain_video().__class__(**{**_plain_video().__dict__, "path": Path("second.mp4"), "frame_rate": "30000/1001", "frame_rate_float": 29.97})
+
+        def fake_run_command(args, logger, dry_run=False):  # type: ignore[no-untyped-def]
+            captured_commands.append(list(args))
+
+        with patch("videomerge.transcode.run_command", side_effect=fake_run_command), patch(
+            "videomerge.merge.run_command", side_effect=fake_run_command
+        ):
+            outputs, owner = preprocess_group(
+                files=[first, second],
+                canvas=Canvas(1280, 720),
+                fps=30.0,
+                codec_plan=CodecPlan("h264", "aac", "libx264", "aac"),
+                tools=ToolPaths(ffmpeg=Path("ffmpeg"), ffprobe=Path("ffprobe")),
+                logger=logging.getLogger("test"),
+                pad_color="black",
+                crf=23,
+                preset="medium",
+                keep_temp=False,
+                dry_run=True,
+            )
+            if owner:
+                owner.cleanup()
+
+        self.assertEqual(len(outputs), 2)
+        self.assertNotEqual(outputs[0], first.path)
+        self.assertNotEqual(outputs[1], second.path)
+        self.assertEqual(len(captured_commands), 2)
+        self.assertTrue(all("-vf" in command for command in captured_commands))
+
+    def test_safe_segmentation_preserves_order_and_batches_ready_runs(self) -> None:
+        first = _plain_video()
+        second = _plain_video().__class__(**{**_plain_video().__dict__, "path": Path("second.mp4")})
+        third = _plain_video().__class__(**{**_plain_video().__dict__, "path": Path("third.mp4"), "frame_rate": "30000/1001", "frame_rate_float": 29.97})
+        fourth = _plain_video().__class__(**{**_plain_video().__dict__, "path": Path("fourth.mp4")})
+        audio_target = AudioTarget("aac", "aac", 48000, 2, "128k")
+
+        segments = build_preprocess_segments(
+            [first, second, third, fourth],
+            Canvas(1280, 720),
+            30.0,
+            CodecPlan("h264", "aac", "libx264", "aac"),
+            audio_target,
+        )
+
+        self.assertEqual([segment.files for segment in segments], [[first, second], [third], [fourth]])
+        self.assertEqual([segment.copy_compatible for segment in segments], [True, False, True])
+
+    def test_preprocess_group_batches_consecutive_ready_files_before_normalization(self) -> None:
+        captured_commands = []
+        first = _plain_video()
+        second = _plain_video().__class__(**{**_plain_video().__dict__, "path": Path("second.mp4")})
+        third = _plain_video().__class__(**{**_plain_video().__dict__, "path": Path("third.mp4"), "frame_rate": "30000/1001", "frame_rate_float": 29.97})
+
+        def fake_run_command(args, logger, dry_run=False):  # type: ignore[no-untyped-def]
+            captured_commands.append(list(args))
+
+        with patch("videomerge.transcode.run_command", side_effect=fake_run_command), patch(
+            "videomerge.merge.run_command", side_effect=fake_run_command
+        ):
+            outputs, owner = preprocess_group(
+                files=[first, second, third],
+                canvas=Canvas(1280, 720),
+                fps=30.0,
+                codec_plan=CodecPlan("h264", "aac", "libx264", "aac"),
+                tools=ToolPaths(ffmpeg=Path("ffmpeg"), ffprobe=Path("ffprobe")),
+                logger=logging.getLogger("test"),
+                pad_color="black",
+                crf=23,
+                preset="medium",
+                keep_temp=False,
+                dry_run=True,
+            )
+            if owner:
+                owner.cleanup()
+
+        concat_commands = [command for command in captured_commands if "-f" in command and "concat" in command]
+        transcode_commands = [command for command in captured_commands if "-vf" in command]
+        self.assertEqual(len(outputs), 2)
+        self.assertEqual(len(concat_commands), 1)
+        self.assertEqual(len(transcode_commands), 2)
 
 
 if __name__ == "__main__":

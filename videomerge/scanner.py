@@ -13,6 +13,7 @@ VIDEO_EXTENSIONS = {
     ".m4v",
     ".flv",
     ".webm",
+    ".wmv"
 }
 
 SORT_OPTIONS = {
