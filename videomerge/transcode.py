@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import tempfile
+import concurrent.futures
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Callable
@@ -13,6 +14,7 @@ from .models import MergeMode
 from .models import Canvas, CodecPlan, ToolPaths, VideoFile
 from .probe import probe_file
 from .utils import run_command
+
 
 
 @dataclass(frozen=True)
@@ -70,48 +72,53 @@ def preprocess_group(
 
     segments = build_preprocess_segments(files, canvas, fps, codec_plan, audio_target)
     logger.info("Preprocess segmentation: %d segment(s) for %d file(s).", len(segments), len(files))
-    outputs: list[Path] = []
-    for index, segment in enumerate(segments, start=1):
-        output_path = temp_dir / f"{index:04d}_{segment.files[0].stem_safe}.mp4"
+    
+    # 预分配数组以确保并发结果按照原始分段顺序插入
+    outputs: list[Path] = [Path()] * len(segments)
+
+    # 包装单个分段的处理逻辑
+    def worker(idx: int, segment: PreprocessSegment) -> tuple[int, Path]:
+        output_path = temp_dir / f"{(idx + 1):04d}_{segment.files[0].stem_safe}.mp4"
         if segment.copy_compatible:
             processed_path = preprocess_copy_segment(
-                segment=segment,
-                output_path=output_path,
-                temp_dir=temp_dir,
-                index=index,
-                canvas=canvas,
-                fps=fps,
-                codec_plan=codec_plan,
-                audio_target=audio_target,
-                tools=tools,
-                logger=logger,
-                pad_color=pad_color,
-                crf=crf,
-                preset=preset,
-                dry_run=dry_run,
-                gpu_plan=gpu_plan,
+                segment=segment, output_path=output_path, temp_dir=temp_dir, index=idx + 1,
+                canvas=canvas, fps=fps, codec_plan=codec_plan, audio_target=audio_target,
+                tools=tools, logger=logger, pad_color=pad_color, crf=crf, preset=preset,
+                dry_run=dry_run, gpu_plan=gpu_plan
             )
         else:
             processed_path = preprocess_file(
-                file=segment.files[0],
-                output_path=output_path,
-                canvas=canvas,
-                fps=fps,
-                codec_plan=codec_plan,
-                audio_target=audio_target,
-                tools=tools,
-                logger=logger,
-                pad_color=pad_color,
-                crf=crf,
-                preset=preset,
-                dry_run=dry_run,
-                gpu_plan=gpu_plan,
-                force_video_transcode=True,
+                file=segment.files[0], output_path=output_path, canvas=canvas, fps=fps,
+                codec_plan=codec_plan, audio_target=audio_target, tools=tools, logger=logger,
+                pad_color=pad_color, crf=crf, preset=preset, dry_run=dry_run, gpu_plan=gpu_plan,
+                force_video_transcode=True
             )
-        outputs.append(processed_path)
-        if progress_callback:
-            for file in segment.files:
-                progress_callback(file)
+        return idx, processed_path
+
+    # 【智能并发调度】
+    # 如果用户启用了 GPU，启用 3 个并发任务榨干硬件吞吐量；
+    # 如果用户禁用了 GPU (使用纯 CPU x264)，则保持单线程，避免 CPU 多实例互相抢占导致整体变慢。
+    is_gpu_enabled = gpu_plan is not None and gpu_plan.enabled
+    max_workers = min(3, len(segments)) if is_gpu_enabled else 1
+
+    if max_workers > 1 and len(segments) > 1:
+        logger.info("Using parallel processing with %d workers (GPU enabled).", max_workers)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {executor.submit(worker, i, seg): i for i, seg in enumerate(segments)}
+            for future in concurrent.futures.as_completed(futures):
+                idx, path = future.result()
+                outputs[idx] = path
+                if progress_callback:
+                    for file in segments[idx].files:
+                        progress_callback(file)
+    else:
+        # 串行模式（原始逻辑）
+        for i, segment in enumerate(segments):
+            _, path = worker(i, segment)
+            outputs[i] = path
+            if progress_callback:
+                for file in segment.files:
+                    progress_callback(file)
 
     if keep_temp:
         logger.info("Keeping temp files in %s", temp_dir)
@@ -217,9 +224,14 @@ def preprocess_file(
         "-noautorotate",
         "-display_rotation:v:0",
         "0",
-        "-i",
-        file.path,
     ]
+
+    # 【硬件解码注入】
+    # 严格遵照用户设置：仅当用户启用了 GPU，且当前画面确实需要被重新解码处理时，才启用硬件解码
+    if gpu_plan is not None and gpu_plan.enabled and video_action != "copy":
+        args.extend(["-hwaccel", "auto"])
+
+    args.extend(["-i", file.path])
 
     if file.has_audio:
         args.extend(
