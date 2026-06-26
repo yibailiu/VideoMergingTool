@@ -15,6 +15,7 @@ import tempfile
 import threading
 import time
 import webbrowser
+from datetime import datetime
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -252,7 +253,7 @@ HTML = r"""<!doctype html>
       color: var(--text-muted);
       white-space: nowrap;
     }
-    table { width: 100%; min-width: 840px; border-collapse: collapse; table-layout: fixed; }
+    table { width: 100%; min-width: 1120px; border-collapse: collapse; table-layout: fixed; }
     th {
       position: sticky;
       top: 0;
@@ -546,16 +547,18 @@ HTML = r"""<!doctype html>
           <table>
             <colgroup>
               <col style="width: 46px">
-              <col style="width: 32%">
+              <col style="width: 25%">
+              <col style="width: 12%">
+              <col style="width: 13%">
+              <col style="width: 8%">
+              <col style="width: 9%">
               <col style="width: 14%">
-              <col style="width: 15%">
-              <col style="width: 11%">
+              <col style="width: 9%">
               <col style="width: 10%">
-              <col style="width: 14%">
             </colgroup>
             <thead>
               <tr>
-                <th class="select-head"></th><th data-i18n="filename">Filename</th><th data-i18n="resolution">Resolution</th><th data-i18n="codec">Codec</th><th>FPS</th><th data-i18n="duration">Dur</th><th data-i18n="status">Status</th>
+                <th class="select-head"></th><th data-i18n="filename">Filename</th><th data-i18n="resolution">Resolution</th><th data-i18n="codec">Codec</th><th>FPS</th><th data-i18n="duration">Dur</th><th data-i18n="fileTime">Created/Modified</th><th data-i18n="fileSize">Size</th><th data-i18n="status">Status</th>
               </tr>
             </thead>
             <tbody id="fileRows"></tbody>
@@ -646,7 +649,7 @@ HTML = r"""<!doctype html>
     const messages = {
       en: {
         ffmpegNotChecked: "! FFmpeg Not Checked", ffmpegChecking: "... Checking FFmpeg", ffmpegInstalled: "✓ FFmpeg Installed", ffmpegMissing: "! FFmpeg Missing", refreshFfmpeg: "Refresh FFmpeg check",
-        sourceFiles: "Source Files", noFolderSelected: "No folder selected", selectFolder: "Select Folder", filename: "Filename", resolution: "Resolution", codec: "Codec", duration: "Dur", status: "Status",
+        sourceFiles: "Source Files", noFolderSelected: "No folder selected", selectFolder: "Select Folder", filename: "Filename", resolution: "Resolution", codec: "Codec", duration: "Dur", fileTime: "Created/Modified", fileSize: "Size", status: "Status",
         processConsole: "Process Console", configuration: "Configuration", mergeStrategy: "Merge Strategy", outputSettings: "Output Settings", browse: "Browse",
         fastMerge: "Fast Merge", optimalMerge: "Optimal Merge", extremeMerge: "Extreme Merge", lossless: "Lossless", smart: "Smart", bruteForce: "Brute Force",
         fastDesc: "Stream copy only. Skips incompatible groups.", optimalDesc: "Groups by orientation and transcodes when needed.", extremeDesc: "Normalizes all files into one output.",
@@ -695,7 +698,7 @@ HTML = r"""<!doctype html>
       },
       zh: {
         ffmpegNotChecked: "! FFmpeg 未检查", ffmpegChecking: "... 正在检查 FFmpeg", ffmpegInstalled: "✓ FFmpeg 已安装", ffmpegMissing: "! FFmpeg 缺失", refreshFfmpeg: "重新检查 FFmpeg",
-        sourceFiles: "源文件", noFolderSelected: "未选择文件夹", selectFolder: "选择文件夹", filename: "文件名", resolution: "分辨率", codec: "编码", duration: "时长", status: "状态",
+        sourceFiles: "源文件", noFolderSelected: "未选择文件夹", selectFolder: "选择文件夹", filename: "文件名", resolution: "分辨率", codec: "编码", duration: "时长", fileTime: "创建/修改", fileSize: "大小", status: "状态",
         processConsole: "处理控制台", configuration: "配置", mergeStrategy: "合并策略", outputSettings: "输出设置", browse: "浏览",
         fastMerge: "快速合并", optimalMerge: "智能合并", extremeMerge: "强制合并", lossless: "无损", smart: "智能", bruteForce: "强制",
         fastDesc: "仅使用流复制，跳过不兼容分组。", optimalDesc: "按横竖屏分组，必要时转码。", extremeDesc: "统一所有文件到一个输出。",
@@ -963,11 +966,12 @@ HTML = r"""<!doctype html>
       Object.entries(by).forEach(([orientation, group]) => {
         const w = Math.max(...group.map(file => file.display_width));
         const h = Math.max(...group.map(file => file.display_height));
-        rows.insertAdjacentHTML("beforeend", `<tr class="group-row"><td colspan="7">${escapeHtml(t("groupLabel", { orientation, size: `${w}x${h}` }))}</td></tr>`);
+        rows.insertAdjacentHTML("beforeend", `<tr class="group-row"><td colspan="9">${escapeHtml(t("groupLabel", { orientation, size: `${w}x${h}` }))}</td></tr>`);
         group.forEach(file => {
           const cls = file.fast_ready ? "status-ok" : "status-warn";
           const status = file.fast_ready ? t("ready") : t("needsTranscode");
           const checked = state.selectedPaths.has(file.path) ? "checked" : "";
+          const timeTitle = `Created: ${file.created_time || "-"} | Modified: ${file.modified_time || "-"} | ${file.path}`;
           rows.insertAdjacentHTML("beforeend", `
             <tr>
               <td class="select-cell"><input class="file-checkbox" type="checkbox" data-path="${escapeHtml(file.path)}" ${checked}></td>
@@ -976,6 +980,8 @@ HTML = r"""<!doctype html>
               <td class="mono">${escapeHtml(file.video_codec)}/${escapeHtml(file.audio_codec || "none")}</td>
               <td class="mono">${escapeHtml(file.fps)}</td>
               <td class="mono">${escapeHtml(file.duration)}</td>
+              <td class="mono" title="${escapeHtml(timeTitle)}">${escapeHtml(file.file_time || "-")}</td>
+              <td class="mono">${escapeHtml(file.file_size || "-")}</td>
               <td class="${cls}">${escapeHtml(status)}</td>
             </tr>`);
         });
@@ -1547,6 +1553,7 @@ def _serialize_files(files: list[VideoFile]) -> list[dict[str, object]]:
     output = []
     for file in files:
         fast_ready = any(file in members and len(members) > 1 for members in fast_groups.values())
+        stat_info = _file_stat_info(file.path)
         output.append(
             {
                 "path": str(file.path),
@@ -1559,9 +1566,48 @@ def _serialize_files(files: list[VideoFile]) -> list[dict[str, object]]:
                 "duration": _format_duration(file.duration),
                 "orientation": file.orientation.value,
                 "fast_ready": fast_ready,
+                **stat_info,
             }
         )
     return output
+
+
+def _file_stat_info(path: Path) -> dict[str, object]:
+    try:
+        stat = path.stat()
+    except OSError:
+        return {
+            "created_time": "",
+            "modified_time": "",
+            "file_time": "",
+            "file_size": "",
+            "file_size_bytes": 0,
+        }
+    created_timestamp = getattr(stat, "st_birthtime", None)
+    created_time = _format_timestamp(created_timestamp) if created_timestamp else ""
+    modified_time = _format_timestamp(stat.st_mtime)
+    return {
+        "created_time": created_time,
+        "modified_time": modified_time,
+        "file_time": created_time or modified_time,
+        "file_size": _format_file_size(stat.st_size),
+        "file_size_bytes": stat.st_size,
+    }
+
+
+def _format_timestamp(timestamp: float) -> str:
+    return datetime.fromtimestamp(timestamp).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _format_file_size(size: int) -> str:
+    value = float(max(size, 0))
+    units = ("B", "KB", "MB", "GB", "TB")
+    for unit in units:
+        if value < 1024 or unit == units[-1]:
+            if unit == "B":
+                return f"{int(value)} {unit}"
+            return f"{value:.1f} {unit}"
+        value /= 1024
 
 
 def _recommended_gpu_mode(gpu_encoders: list[str]) -> str:

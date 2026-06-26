@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import tempfile
 import concurrent.futures
+from collections import Counter
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Callable
@@ -48,13 +49,6 @@ def preprocess_group(
     temp_root: Path | None = None,
     progress_callback: Callable[[VideoFile], None] | None = None,
 ) -> tuple[list[Path], tempfile.TemporaryDirectory[str] | None]:
-    temp_owner = (
-        None
-        if keep_temp
-        else tempfile.TemporaryDirectory(prefix="videomerge_preprocess_", dir=temp_root)
-    )
-    temp_dir = Path(temp_owner.name) if temp_owner else Path(tempfile.mkdtemp(prefix="videomerge_preprocess_", dir=temp_root))
-    logger.info("Preprocessing temp directory: %s", temp_dir)
     audio_target = choose_audio_target(files, codec_plan)
     logger.info(
         "Audio target: codec=%s sample_rate=%d channels=%d bitrate=%s",
@@ -71,21 +65,51 @@ def preprocess_group(
         return [file.path for file in files], None
 
     segments = build_preprocess_segments(files, canvas, fps, codec_plan, audio_target)
+    passthrough_signature = choose_passthrough_signature(segments)
     logger.info("Preprocess segmentation: %d segment(s) for %d file(s).", len(segments), len(files))
+    if passthrough_signature:
+        passthrough_count = sum(
+            len(segment.files)
+            for segment in segments
+            if segment.copy_compatible and _concat_signature(segment.files[0]) == passthrough_signature
+        )
+        logger.info(
+            "Preprocess passthrough: %d ready file(s) match the dominant concat signature and will skip normalization.",
+            passthrough_count,
+        )
+
+    temp_owner = (
+        None
+        if keep_temp
+        else tempfile.TemporaryDirectory(prefix="videomerge_preprocess_", dir=temp_root)
+    )
+    temp_dir = Path(temp_owner.name) if temp_owner else Path(tempfile.mkdtemp(prefix="videomerge_preprocess_", dir=temp_root))
+    logger.info("Preprocessing temp directory: %s", temp_dir)
     
     # 预分配数组以确保并发结果按照原始分段顺序插入
-    outputs: list[Path] = [Path()] * len(segments)
+    outputs: list[list[Path]] = [[] for _ in segments]
 
     # 包装单个分段的处理逻辑
-    def worker(idx: int, segment: PreprocessSegment) -> tuple[int, Path]:
+    def worker(idx: int, segment: PreprocessSegment) -> tuple[int, list[Path]]:
         output_path = temp_dir / f"{(idx + 1):04d}_{segment.files[0].stem_safe}.mp4"
-        if segment.copy_compatible:
+        if (
+            segment.copy_compatible
+            and passthrough_signature is not None
+            and _concat_signature(segment.files[0]) == passthrough_signature
+        ):
+            logger.info(
+                "Preprocess decision: passthrough %d ready file(s) without temp concat/transcode.",
+                len(segment.files),
+            )
+            processed_paths = [file.path for file in segment.files]
+        elif segment.copy_compatible:
             processed_path = preprocess_copy_segment(
                 segment=segment, output_path=output_path, temp_dir=temp_dir, index=idx + 1,
                 canvas=canvas, fps=fps, codec_plan=codec_plan, audio_target=audio_target,
                 tools=tools, logger=logger, pad_color=pad_color, crf=crf, preset=preset,
                 dry_run=dry_run, gpu_plan=gpu_plan
             )
+            processed_paths = [processed_path]
         else:
             processed_path = preprocess_file(
                 file=segment.files[0], output_path=output_path, canvas=canvas, fps=fps,
@@ -93,7 +117,8 @@ def preprocess_group(
                 pad_color=pad_color, crf=crf, preset=preset, dry_run=dry_run, gpu_plan=gpu_plan,
                 force_video_transcode=True
             )
-        return idx, processed_path
+            processed_paths = [processed_path]
+        return idx, processed_paths
 
     # 【智能并发调度】
     # 如果用户启用了 GPU，启用 3 个并发任务榨干硬件吞吐量；
@@ -106,24 +131,25 @@ def preprocess_group(
         with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = {executor.submit(worker, i, seg): i for i, seg in enumerate(segments)}
             for future in concurrent.futures.as_completed(futures):
-                idx, path = future.result()
-                outputs[idx] = path
+                idx, paths = future.result()
+                outputs[idx] = paths
                 if progress_callback:
                     for file in segments[idx].files:
                         progress_callback(file)
     else:
         # 串行模式（原始逻辑）
         for i, segment in enumerate(segments):
-            _, path = worker(i, segment)
-            outputs[i] = path
+            _, paths = worker(i, segment)
+            outputs[i] = paths
             if progress_callback:
                 for file in segment.files:
                     progress_callback(file)
 
+    flattened_outputs = [path for segment_paths in outputs for path in segment_paths]
     if keep_temp:
         logger.info("Keeping temp files in %s", temp_dir)
-        return outputs, None
-    return outputs, temp_owner
+        return flattened_outputs, None
+    return flattened_outputs, temp_owner
 
 
 def preprocess_copy_segment(
@@ -396,6 +422,17 @@ def build_preprocess_segments(
 
     flush_current()
     return segments
+
+
+def choose_passthrough_signature(segments: list[PreprocessSegment]) -> tuple[object, ...] | None:
+    ready_signatures: list[tuple[object, ...]] = []
+    for segment in segments:
+        if not segment.copy_compatible:
+            continue
+        ready_signatures.extend(_concat_signature(file) for file in segment.files)
+    if not ready_signatures:
+        return None
+    return Counter(ready_signatures).most_common(1)[0][0]
 
 
 def _concat_signature(file: VideoFile) -> tuple[object, ...]:

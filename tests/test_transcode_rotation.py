@@ -11,6 +11,7 @@ from videomerge.transcode import (
     build_preprocess_segments,
     build_video_filter,
     can_concat_originals,
+    choose_passthrough_signature,
     choose_audio_action,
     choose_audio_target,
     choose_video_action,
@@ -207,7 +208,7 @@ class TranscodeRotationTests(unittest.TestCase):
             )
         )
 
-    def test_preprocess_group_uses_safe_segments_when_any_file_needs_normalization(self) -> None:
+    def test_preprocess_group_passthroughs_dominant_ready_files_when_some_need_normalization(self) -> None:
         captured_commands = []
         first = _plain_video()
         second = _plain_video().__class__(**{**_plain_video().__dict__, "path": Path("second.mp4"), "frame_rate": "30000/1001", "frame_rate_float": 29.97})
@@ -235,9 +236,9 @@ class TranscodeRotationTests(unittest.TestCase):
                 owner.cleanup()
 
         self.assertEqual(len(outputs), 2)
-        self.assertNotEqual(outputs[0], first.path)
+        self.assertEqual(outputs[0], first.path)
         self.assertNotEqual(outputs[1], second.path)
-        self.assertEqual(len(captured_commands), 2)
+        self.assertEqual(len(captured_commands), 1)
         self.assertTrue(all("-vf" in command for command in captured_commands))
 
     def test_safe_segmentation_preserves_order_and_batches_ready_runs(self) -> None:
@@ -258,11 +259,26 @@ class TranscodeRotationTests(unittest.TestCase):
         self.assertEqual([segment.files for segment in segments], [[first, second], [third], [fourth]])
         self.assertEqual([segment.copy_compatible for segment in segments], [True, False, True])
 
-    def test_preprocess_group_batches_consecutive_ready_files_before_normalization(self) -> None:
+    def test_choose_passthrough_signature_uses_most_common_ready_signature(self) -> None:
+        first = _plain_video()
+        second = _plain_video().__class__(**{**_plain_video().__dict__, "path": Path("second.mp4")})
+        third = _plain_video().__class__(**{**_plain_video().__dict__, "path": Path("third.mp4"), "frame_rate": "60/2", "frame_rate_float": 30.0})
+        audio_target = AudioTarget("aac", "aac", 48000, 2, "128k")
+        segments = build_preprocess_segments(
+            [first, second, third],
+            Canvas(1280, 720),
+            30.0,
+            CodecPlan("h264", "aac", "libx264", "aac"),
+            audio_target,
+        )
+
+        self.assertEqual(choose_passthrough_signature(segments), choose_passthrough_signature([segments[0]]))
+
+    def test_preprocess_group_normalizes_non_dominant_ready_signature(self) -> None:
         captured_commands = []
         first = _plain_video()
         second = _plain_video().__class__(**{**_plain_video().__dict__, "path": Path("second.mp4")})
-        third = _plain_video().__class__(**{**_plain_video().__dict__, "path": Path("third.mp4"), "frame_rate": "30000/1001", "frame_rate_float": 29.97})
+        third = _plain_video().__class__(**{**_plain_video().__dict__, "path": Path("third.mp4"), "frame_rate": "60/2", "frame_rate_float": 30.0})
 
         def fake_run_command(args, logger, dry_run=False):  # type: ignore[no-untyped-def]
             captured_commands.append(list(args))
@@ -288,9 +304,10 @@ class TranscodeRotationTests(unittest.TestCase):
 
         concat_commands = [command for command in captured_commands if "-f" in command and "concat" in command]
         transcode_commands = [command for command in captured_commands if "-vf" in command]
-        self.assertEqual(len(outputs), 2)
-        self.assertEqual(len(concat_commands), 1)
-        self.assertEqual(len(transcode_commands), 2)
+        self.assertEqual(outputs[0:2], [first.path, second.path])
+        self.assertEqual(len(outputs), 3)
+        self.assertEqual(len(concat_commands), 0)
+        self.assertEqual(len(transcode_commands), 1)
 
 
 if __name__ == "__main__":

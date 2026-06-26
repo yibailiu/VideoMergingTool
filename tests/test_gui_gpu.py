@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import json
+import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
 
-from videomerge.gui import _build_merge_command, _detect_gui_ffmpeg_encoders, _windows_notification_script
+from videomerge.gui import _build_merge_command, _detect_gui_ffmpeg_encoders, _serialize_files, _windows_notification_script
+from videomerge.models import Orientation, VideoFile
 
 
 class GuiGpuTests(unittest.TestCase):
@@ -45,6 +47,17 @@ class GuiGpuTests(unittest.TestCase):
 
         self.assertEqual(selected, ["/tmp/in/a.mp4", "/tmp/in/b.mp4"])
 
+    def test_serialize_files_includes_filesystem_time_and_size(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "clip.mp4"
+            path.write_bytes(b"x" * 1536)
+            serialized = _serialize_files([_video(path)])[0]
+
+        self.assertIn("modified_time", serialized)
+        self.assertIn("file_time", serialized)
+        self.assertEqual(serialized["file_size"], "1.5 KB")
+        self.assertEqual(serialized["file_size_bytes"], 1536)
+
     def test_windows_notification_script_uses_notify_icon_and_sound(self) -> None:
         script = _windows_notification_script("A&B's", "done", True)
 
@@ -62,6 +75,30 @@ class GuiGpuTests(unittest.TestCase):
 
         self.assertIn("h264_videotoolbox", encoders)
         self.assertEqual(detect.call_count, 2)
+
+def _video(path: Path) -> VideoFile:
+    return VideoFile(
+        path=path,
+        container="mp4",
+        video_codec="h264",
+        audio_codec="aac",
+        width=1280,
+        height=720,
+        display_width=1280,
+        display_height=720,
+        aspect_ratio="1280:720",
+        frame_rate="30/1",
+        frame_rate_float=30.0,
+        pixel_format="yuv420p",
+        duration=10.0,
+        has_audio=True,
+        orientation=Orientation.landscape,
+        rotation=0,
+        video_bitrate=2_000_000,
+        audio_bitrate=128_000,
+        audio_sample_rate=48000,
+        audio_channels=2,
+    )
 
 
 if __name__ == "__main__":
