@@ -21,6 +21,8 @@ SORT_OPTIONS = {
     "name-natural-desc",
     "name-asc",
     "name-desc",
+    "created-asc",
+    "created-desc",
     "modified-asc",
     "modified-desc",
     "size-asc",
@@ -47,6 +49,9 @@ def _sort_video_files(files: list[Path], input_dir: Path, sort_by: str) -> list[
         return sorted(files, key=lambda path: _natural_path_key(path, input_dir), reverse=reverse)
     if sort_by.startswith("name-"):
         return sorted(files, key=lambda path: _casefold_path_key(path, input_dir), reverse=reverse)
+    if sort_by.startswith("created-"):
+        natural_sorted = sorted(files, key=lambda path: _natural_path_key(path, input_dir))
+        return sorted(natural_sorted, key=_created_time_key, reverse=reverse)
     if sort_by.startswith("modified-"):
         natural_sorted = sorted(files, key=lambda path: _natural_path_key(path, input_dir))
         return sorted(natural_sorted, key=lambda path: path.stat().st_mtime, reverse=reverse)
@@ -62,6 +67,11 @@ def _casefold_path_key(path: Path, root: Path) -> str:
     except ValueError:
         relative = path
     return str(relative).casefold()
+
+
+def _created_time_key(path: Path) -> float:
+    stat = path.stat()
+    return float(getattr(stat, "st_birthtime", stat.st_ctime))
 
 
 def _natural_path_key(path: Path, root: Path) -> tuple[tuple[int, object], ...]:

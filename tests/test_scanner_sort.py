@@ -4,6 +4,7 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from videomerge.scanner import scan_video_files
 
@@ -48,6 +49,21 @@ class ScannerSortTests(unittest.TestCase):
 
             files = scan_video_files(root, recursive=False, sort_by="modified-asc")
             reverse_files = scan_video_files(root, recursive=False, sort_by="modified-desc")
+
+        self.assertEqual([file.name for file in files], ["clip2.mp4", "clip1.mp4"])
+        self.assertEqual([file.name for file in reverse_files], ["clip1.mp4", "clip2.mp4"])
+
+    def test_scan_supports_sorting_by_created_time(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            older = root / "clip2.mp4"
+            newer = root / "clip1.mp4"
+            older.touch()
+            newer.touch()
+
+            with patch("videomerge.scanner._created_time_key", side_effect=lambda path: {"clip2.mp4": 100.0, "clip1.mp4": 200.0}[path.name]):
+                files = scan_video_files(root, recursive=False, sort_by="created-asc")
+                reverse_files = scan_video_files(root, recursive=False, sort_by="created-desc")
 
         self.assertEqual([file.name for file in files], ["clip2.mp4", "clip1.mp4"])
         self.assertEqual([file.name for file in reverse_files], ["clip1.mp4", "clip2.mp4"])

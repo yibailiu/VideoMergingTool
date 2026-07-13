@@ -15,6 +15,7 @@ import tempfile
 import threading
 import time
 import webbrowser
+from collections import Counter
 from datetime import datetime
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -25,6 +26,7 @@ from .env_check import default_tools_dir, resolve_tools
 from .grouping import group_fast, split_by_orientation
 from .gpu import detect_ffmpeg_encoders
 from .models import MergeMode, Orientation, VideoFile
+from .planning import build_optimal_group_plan
 from .probe import probe_files
 from .scanner import scan_video_files
 from .utils import subprocess_window_kwargs
@@ -41,6 +43,7 @@ CONFIG_FIELD_IDS = [
     "sortBy",
     "codec",
     "gpu",
+    "gpuWorkers",
     "audioCodec",
     "qualityProfile",
     "crf",
@@ -253,7 +256,7 @@ HTML = r"""<!doctype html>
       color: var(--text-muted);
       white-space: nowrap;
     }
-    table { width: 100%; min-width: 1120px; border-collapse: collapse; table-layout: fixed; }
+    table { width: 100%; min-width: 1240px; border-collapse: collapse; table-layout: fixed; }
     th {
       position: sticky;
       top: 0;
@@ -547,18 +550,19 @@ HTML = r"""<!doctype html>
           <table>
             <colgroup>
               <col style="width: 46px">
-              <col style="width: 25%">
+              <col style="width: 22%">
+              <col style="width: 11%">
               <col style="width: 12%">
-              <col style="width: 13%">
               <col style="width: 8%">
+              <col style="width: 8%">
+              <col style="width: 13%">
+              <col style="width: 13%">
               <col style="width: 9%">
-              <col style="width: 14%">
-              <col style="width: 9%">
-              <col style="width: 10%">
+              <col style="width: 8%">
             </colgroup>
             <thead>
               <tr>
-                <th class="select-head"></th><th data-i18n="filename">Filename</th><th data-i18n="resolution">Resolution</th><th data-i18n="codec">Codec</th><th>FPS</th><th data-i18n="duration">Dur</th><th data-i18n="fileTime">Created/Modified</th><th data-i18n="fileSize">Size</th><th data-i18n="status">Status</th>
+                <th class="select-head"></th><th data-i18n="filename">Filename</th><th data-i18n="resolution">Resolution</th><th data-i18n="codec">Codec</th><th>FPS</th><th data-i18n="duration">Dur</th><th data-i18n="createdTime">Created</th><th data-i18n="modifiedTime">Modified</th><th data-i18n="fileSize">Size</th><th data-i18n="status">Status</th>
               </tr>
             </thead>
             <tbody id="fileRows"></tbody>
@@ -602,15 +606,19 @@ HTML = r"""<!doctype html>
             <option value="name-natural-desc" data-i18n="sortNameNaturalDesc">Filename natural (Z-A)</option>
             <option value="name-asc" data-i18n="sortNameAsc">Filename text (A-Z)</option>
             <option value="name-desc" data-i18n="sortNameDesc">Filename text (Z-A)</option>
+            <option value="created-asc" data-i18n="sortCreatedAsc">Created time (oldest first)</option>
+            <option value="created-desc" data-i18n="sortCreatedDesc">Created time (newest first)</option>
             <option value="modified-asc" data-i18n="sortModifiedAsc">Modified time (oldest first)</option>
             <option value="modified-desc" data-i18n="sortModifiedDesc">Modified time (newest first)</option>
             <option value="size-asc" data-i18n="sortSizeAsc">File size (smallest first)</option>
             <option value="size-desc" data-i18n="sortSizeDesc">File size (largest first)</option>
           </select>
           <div class="field-label label-micro"><span data-i18n="targetVideoCodec">Target Video Codec</span> <span class="info" data-tip-i18n="tipVideoCodec">i</span></div>
-          <select id="codec"><option value="">Auto H.264</option><option>h264</option><option>hevc</option><option>vp9</option><option>av1</option><option>mpeg4</option></select>
+          <select id="codec"><option value="" data-i18n="autoDominant">Auto dominant</option><option>h264</option><option>hevc</option><option>vp9</option><option>av1</option><option>mpeg4</option></select>
           <div class="field-label label-micro"><span data-i18n="gpuAcceleration">GPU Acceleration</span> <span class="info" data-tip-i18n="tipGpu">i</span></div>
           <select id="gpu"><option value="off">off</option><option value="auto">auto</option><option value="nvenc">nvenc</option><option value="qsv">qsv</option><option value="amf">amf</option><option value="videotoolbox">videotoolbox (macOS)</option></select>
+          <div class="field-label label-micro"><span data-i18n="gpuWorkers">GPU Concurrent Jobs</span> <span class="info" data-tip-i18n="tipGpuWorkers">i</span></div>
+          <select id="gpuWorkers"><option value="1">1</option><option value="2">2</option><option value="3">3</option></select>
           <div class="field-label label-micro"><span data-i18n="targetAudioCodec">Target Audio Codec</span> <span class="info" data-tip-i18n="tipAudioCodec">i</span></div>
           <select id="audioCodec"><option value="">Auto majority</option><option>aac</option><option>mp3</option><option>opus</option><option>vorbis</option><option>pcm_s16le</option></select>
           <div class="field-label label-micro"><span data-i18n="qualityProfile">Quality Profile</span> <span class="info" data-tip-i18n="tipQualityProfile">i</span></div>
@@ -624,7 +632,7 @@ HTML = r"""<!doctype html>
           <div class="field-label label-micro"><span data-i18n="fpsPolicy">FPS Policy</span> <span class="info" data-tip-i18n="tipFpsPolicy">i</span></div>
           <select id="fpsPolicy"><option>majority</option><option>max</option><option>min</option></select>
           <div class="field-label label-micro"><span data-i18n="resolutionPolicy">Resolution Policy</span> <span class="info" data-tip-i18n="tipResolutionPolicy">i</span></div>
-          <select id="resolutionPolicy"><option>largest</option></select>
+          <select id="resolutionPolicy"><option value="dominant" data-i18n="resolutionDominant">Dominant source</option><option value="largest" data-i18n="resolutionLargest">Largest canvas</option></select>
           <div class="field-label label-micro"><span data-i18n="padColor">Pad Color</span> <span class="info" data-tip-i18n="tipPadColor">i</span></div>
           <input id="padColor" value="black">
           <div class="field-label label-micro"><span data-i18n="ffmpegPath">FFmpeg Path</span> <span class="info" data-tip-i18n="tipFfmpegPath">i</span></div>
@@ -649,17 +657,19 @@ HTML = r"""<!doctype html>
     const messages = {
       en: {
         ffmpegNotChecked: "! FFmpeg Not Checked", ffmpegChecking: "... Checking FFmpeg", ffmpegInstalled: "✓ FFmpeg Installed", ffmpegMissing: "! FFmpeg Missing", refreshFfmpeg: "Refresh FFmpeg check",
-        sourceFiles: "Source Files", noFolderSelected: "No folder selected", selectFolder: "Select Folder", filename: "Filename", resolution: "Resolution", codec: "Codec", duration: "Dur", fileTime: "Created/Modified", fileSize: "Size", status: "Status",
+        sourceFiles: "Source Files", noFolderSelected: "No folder selected", selectFolder: "Select Folder", filename: "Filename", resolution: "Resolution", codec: "Codec", duration: "Dur", createdTime: "Created", modifiedTime: "Modified", fileSize: "Size", status: "Status",
         processConsole: "Process Console", configuration: "Configuration", mergeStrategy: "Merge Strategy", outputSettings: "Output Settings", browse: "Browse",
         fastMerge: "Fast Merge", optimalMerge: "Optimal Merge", extremeMerge: "Extreme Merge", lossless: "Lossless", smart: "Smart", bruteForce: "Brute Force",
         fastDesc: "Stream copy only. Skips incompatible groups.", optimalDesc: "Groups by orientation and transcodes when needed.", extremeDesc: "Normalizes all files into one output.",
         outputFilenamePrefix: "Output Filename Prefix", outputFolder: "Output Folder", tempFolder: "Temp Folder", outputFormat: "Output Format", mergeSortOrder: "Merge Sort Order", targetVideoCodec: "Target Video Codec",
-        gpuAcceleration: "GPU Acceleration", targetAudioCodec: "Target Audio Codec", qualityProfile: "Quality Profile", qualityBalanced: "Balanced", qualityHigh: "High Quality", qualitySmall: "Smaller File", crfQuality: "CRF (Quality)", lowerBetter: "Lower = better", preset: "Preset",
+        gpuAcceleration: "GPU Acceleration", gpuWorkers: "GPU Concurrent Jobs", targetAudioCodec: "Target Audio Codec", qualityProfile: "Quality Profile", qualityBalanced: "Balanced", qualityHigh: "High Quality", qualitySmall: "Smaller File", crfQuality: "CRF (Quality)", lowerBetter: "Lower = better", preset: "Preset",
+        autoDominant: "Auto dominant", resolutionDominant: "Dominant source", resolutionLargest: "Largest canvas",
         fpsPolicy: "FPS Policy", resolutionPolicy: "Resolution Policy", padColor: "Pad Color", ffmpegPath: "FFmpeg Path", ffprobePath: "FFprobe Path",
         recursiveScan: "Recursive Scan", overwrite: "Overwrite", dryRun: "Dry Run", keepTempFiles: "Keep Temp Files", autoDownloadDeps: "Auto Download Deps",
         notifyOnComplete: "Completion Notification", playSoundOnComplete: "Completion Sound",
         outputDirHint: "Leave empty to use the default merged folder under the source directory.", tempDirHint: "Leave empty to use the system default temp directory.",
         sortNameNaturalAsc: "Filename natural (A-Z)", sortNameNaturalDesc: "Filename natural (Z-A)", sortNameAsc: "Filename text (A-Z)", sortNameDesc: "Filename text (Z-A)",
+        sortCreatedAsc: "Created time (oldest first)", sortCreatedDesc: "Created time (newest first)",
         sortModifiedAsc: "Modified time (oldest first)", sortModifiedDesc: "Modified time (newest first)", sortSizeAsc: "File size (smallest first)", sortSizeDesc: "File size (largest first)",
         startMerge: "▷ START MERGE", stopMerge: "■ STOP MERGE", switchLanguage: "Switch language",
         modeSelected: "{mode} MODE SELECTED", selectFolderPlan: "Select a folder to preview the merge plan.",
@@ -667,7 +677,8 @@ HTML = r"""<!doctype html>
         fastPlan: "Tool will stream-copy compatible groups only. Incompatible files will be skipped.",
         optimalPlan: "Tool will create up to {count} output file(s), separated by landscape and portrait display orientation.",
         extremePlan: "Tool will normalize all files to one display canvas and produce one output file.",
-        groupLabel: "{orientation} group ({size})", ready: "Ready", needsTranscode: "Needs Transcode", summary: "{files} files detected - {groups} groups",
+        groupLabel: "{orientation} group ({size})", ready: "Ready", needsTranscode: "Needs Transcode", skipped: "Skipped", excluded: "Not Selected", summary: "{files} files detected - {groups} groups",
+        planCounts: "{copy} stream copy, {transcode} transcode, {skipped} skipped.",
         folderCancelled: "Folder selection was cancelled or is unavailable on this system.", scanning: "Scanning {path}", filesAnalyzed: "{count} files analyzed.",
         startingMerge: "Starting {mode} merge", stoppingMerge: "Stopping current merge task...", selectBegin: "Select a source folder to begin.",
         mergeCompletedTitle: "Merge Completed", mergeCompletedBody: "Your video merge task has finished.", mergeFailedTitle: "Merge Failed", mergeFailedBody: "The merge task ended with an error. Check the process console for details.",
@@ -677,14 +688,15 @@ HTML = r"""<!doctype html>
         tipTempDir: "Maps to --temp-dir. Leave empty to use the system default temp directory.",
         tipOutputFormat: "Maps to --output-format. Supported containers: mp4, mkv, mov, avi, ts, webm.",
         tipSortOrder: "Maps to --sort-by. Controls the scan, preview, preprocessing, and final merge order.",
-        tipVideoCodec: "Maps to --video-codec. Leave empty for H.264 by default, or VP9 for webm.",
+        tipVideoCodec: "Maps to --video-codec. Leave empty to preserve the dominant compatible source codec.",
         tipGpu: "Maps to --gpu. auto chooses the native encoder when available and falls back to CPU when needed.",
+        tipGpuWorkers: "Maps to --gpu-workers. One job minimizes GPU pressure; two or three may improve throughput on high-end hardware.",
         tipAudioCodec: "Maps to --audio-codec. Compatible source audio is copied when possible; incompatible audio is re-encoded only when needed.",
         tipQualityProfile: "Maps to --quality-profile. balanced uses CRF 23, high uses CRF 20, small uses CRF 25.",
         tipCrf: "Maps to --crf. Overrides the quality profile. Lower means better quality and larger files.",
         tipPreset: "Maps to --preset. Slower presets usually produce smaller files at the same CRF but take longer.",
         tipFpsPolicy: "Maps to --fps-policy. majority uses the most common FPS; max/min choose the highest/lowest FPS.",
-        tipResolutionPolicy: "Maps to --resolution-policy. Currently only largest is supported.",
+        tipResolutionPolicy: "Maps to --resolution-policy. dominant minimizes transcoding; largest preserves the previous largest-canvas behavior.",
         tipPadColor: "Maps to --pad-color. Used when videos are scaled into a canvas without cropping.",
         tipFfmpegPath: "Maps to --ffmpeg-path. Optional explicit path to ffmpeg binary.",
         tipFfprobePath: "Maps to --ffprobe-path. Optional explicit path to ffprobe binary.",
@@ -698,17 +710,19 @@ HTML = r"""<!doctype html>
       },
       zh: {
         ffmpegNotChecked: "! FFmpeg 未检查", ffmpegChecking: "... 正在检查 FFmpeg", ffmpegInstalled: "✓ FFmpeg 已安装", ffmpegMissing: "! FFmpeg 缺失", refreshFfmpeg: "重新检查 FFmpeg",
-        sourceFiles: "源文件", noFolderSelected: "未选择文件夹", selectFolder: "选择文件夹", filename: "文件名", resolution: "分辨率", codec: "编码", duration: "时长", fileTime: "创建/修改", fileSize: "大小", status: "状态",
+        sourceFiles: "源文件", noFolderSelected: "未选择文件夹", selectFolder: "选择文件夹", filename: "文件名", resolution: "分辨率", codec: "编码", duration: "时长", createdTime: "创建时间", modifiedTime: "修改时间", fileSize: "大小", status: "状态",
         processConsole: "处理控制台", configuration: "配置", mergeStrategy: "合并策略", outputSettings: "输出设置", browse: "浏览",
         fastMerge: "快速合并", optimalMerge: "智能合并", extremeMerge: "强制合并", lossless: "无损", smart: "智能", bruteForce: "强制",
         fastDesc: "仅使用流复制，跳过不兼容分组。", optimalDesc: "按横竖屏分组，必要时转码。", extremeDesc: "统一所有文件到一个输出。",
         outputFilenamePrefix: "输出文件名前缀", outputFolder: "输出目录", tempFolder: "临时目录", outputFormat: "输出格式", mergeSortOrder: "合并排序方式", targetVideoCodec: "目标视频编码",
-        gpuAcceleration: "GPU 加速", targetAudioCodec: "目标音频编码", qualityProfile: "质量策略", qualityBalanced: "均衡", qualityHigh: "高质量", qualitySmall: "更小体积", crfQuality: "CRF（质量）", lowerBetter: "越低质量越高", preset: "编码预设",
+        gpuAcceleration: "GPU 加速", gpuWorkers: "GPU 并发任务", targetAudioCodec: "目标音频编码", qualityProfile: "质量策略", qualityBalanced: "均衡", qualityHigh: "高质量", qualitySmall: "更小体积", crfQuality: "CRF（质量）", lowerBetter: "越低质量越高", preset: "编码预设",
+        autoDominant: "自动选择主流编码", resolutionDominant: "主流源规格", resolutionLargest: "最大画布",
         fpsPolicy: "帧率策略", resolutionPolicy: "分辨率策略", padColor: "填充颜色", ffmpegPath: "FFmpeg 路径", ffprobePath: "FFprobe 路径",
         recursiveScan: "递归扫描", overwrite: "覆盖输出", dryRun: "试运行", keepTempFiles: "保留临时文件", autoDownloadDeps: "自动下载依赖",
         notifyOnComplete: "完成后提示", playSoundOnComplete: "完成提示音",
         outputDirHint: "留空时默认使用源目录下的 merged 文件夹。", tempDirHint: "留空时使用系统默认临时目录。",
         sortNameNaturalAsc: "文件名自然升序", sortNameNaturalDesc: "文件名自然降序", sortNameAsc: "文件名文本升序", sortNameDesc: "文件名文本降序",
+        sortCreatedAsc: "创建时间从旧到新", sortCreatedDesc: "创建时间从新到旧",
         sortModifiedAsc: "修改时间从旧到新", sortModifiedDesc: "修改时间从新到旧", sortSizeAsc: "文件大小从小到大", sortSizeDesc: "文件大小从大到小",
         startMerge: "▷ 开始合并", stopMerge: "■ 停止合并", switchLanguage: "切换语言",
         modeSelected: "已选择 {mode} 模式", selectFolderPlan: "选择文件夹后预览合并计划。",
@@ -716,7 +730,8 @@ HTML = r"""<!doctype html>
         fastPlan: "工具将仅对兼容分组合并，跳过不兼容文件。",
         optimalPlan: "工具将按横竖屏生成最多 {count} 个输出文件。",
         extremePlan: "工具将把所有文件统一到一个画布并生成一个输出文件。",
-        groupLabel: "{orientation} 分组（{size}）", ready: "就绪", needsTranscode: "需要转码", summary: "检测到 {files} 个文件 - {groups} 个分组",
+        groupLabel: "{orientation} 分组（{size}）", ready: "就绪", needsTranscode: "需要转码", skipped: "将跳过", excluded: "未选中", summary: "检测到 {files} 个文件 - {groups} 个分组",
+        planCounts: "流复制 {copy} 个，转码 {transcode} 个，跳过 {skipped} 个。",
         folderCancelled: "文件夹选择已取消，或当前系统不可用。", scanning: "正在扫描 {path}", filesAnalyzed: "已分析 {count} 个文件。",
         startingMerge: "开始 {mode} 合并", stoppingMerge: "正在停止当前合并任务...", selectBegin: "请选择源文件夹开始。",
         mergeCompletedTitle: "合并完成", mergeCompletedBody: "视频合并任务已完成。", mergeFailedTitle: "合并失败", mergeFailedBody: "合并任务发生错误，请查看处理控制台。", mergeStoppedTitle: "合并已停止", mergeStoppedBody: "用户已手动停止当前合并任务。",
@@ -725,14 +740,15 @@ HTML = r"""<!doctype html>
         tipTempDir: "对应 --temp-dir。留空时使用系统默认临时目录。",
         tipOutputFormat: "对应 --output-format。支持 mp4、mkv、mov、avi、ts、webm。",
         tipSortOrder: "对应 --sort-by。控制扫描、预览、预处理和最终合并顺序。",
-        tipVideoCodec: "对应 --video-codec。留空时默认使用 H.264，webm 输出默认 VP9。",
+        tipVideoCodec: "对应 --video-codec。留空时优先保持兼容的主流源编码。",
         tipGpu: "对应 --gpu。auto 会优先选择可用的系统原生编码器，必要时回退 CPU。",
+        tipGpuWorkers: "对应 --gpu-workers。1 个任务可降低 GPU 压力，高性能设备可选择 2 或 3。",
         tipAudioCodec: "对应 --audio-codec。兼容的源音频会尽量复制，只在必要时重编码。",
         tipQualityProfile: "对应 --quality-profile。均衡使用 CRF 23，高质量使用 CRF 20，更小体积使用 CRF 25。",
         tipCrf: "对应 --crf。会覆盖质量策略。数值越低质量越高，文件越大。",
         tipPreset: "对应 --preset。更慢的预设通常体积更小，但耗时更长。",
         tipFpsPolicy: "对应 --fps-policy。majority 使用最常见帧率，max/min 选择最高/最低帧率。",
-        tipResolutionPolicy: "对应 --resolution-policy。目前仅支持 largest。",
+        tipResolutionPolicy: "对应 --resolution-policy。主流源规格会尽量减少转码，最大画布保留原来的最大分辨率行为。",
         tipPadColor: "对应 --pad-color。视频缩放到画布且不裁剪时使用。",
         tipFfmpegPath: "对应 --ffmpeg-path。可选的 ffmpeg 二进制路径。",
         tipFfprobePath: "对应 --ffprobe-path。可选的 ffprobe 二进制路径。",
@@ -750,6 +766,7 @@ HTML = r"""<!doctype html>
       inputDir: "",
       files: [],
       selectedPaths: new Set(),
+      plan: null,
       running: false,
       statusTimer: null,
       mergeWasRunning: false,
@@ -820,7 +837,7 @@ HTML = r"""<!doctype html>
     }
     function readConfig() {
       const values = { lang: state.lang, mode: state.mode };
-      const ids = ["format", "sortBy", "codec", "gpu", "audioCodec", "qualityProfile", "crf", "preset", "fpsPolicy", "resolutionPolicy", "padColor", "outputDir", "tempDir", "ffmpegPath", "ffprobePath", "recursive", "overwrite", "dryRun", "keepTemp", "autoDownloadDeps", "notifyOnComplete", "playSoundOnComplete"];
+      const ids = ["format", "sortBy", "codec", "gpu", "gpuWorkers", "audioCodec", "qualityProfile", "crf", "preset", "fpsPolicy", "resolutionPolicy", "padColor", "outputDir", "tempDir", "ffmpegPath", "ffprobePath", "recursive", "overwrite", "dryRun", "keepTemp", "autoDownloadDeps", "notifyOnComplete", "playSoundOnComplete"];
       ids.forEach(id => {
         const node = $(id);
         if (pathFields.includes(id) && node.dataset.custom !== "true") return;
@@ -830,6 +847,9 @@ HTML = r"""<!doctype html>
     }
     function applyConfig(config) {
       if (!config || typeof config !== "object") return;
+      if (config.resolutionPolicy === "largest" && config.gpuWorkers == null) {
+        config = { ...config, resolutionPolicy: "dominant", gpuWorkers: "1" };
+      }
       if (config.lang && messages[config.lang]) state.lang = config.lang;
       if (config.mode) state.mode = config.mode;
       Object.entries(config).forEach(([id, value]) => {
@@ -925,16 +945,19 @@ HTML = r"""<!doctype html>
     function selectAllFiles() {
       state.selectedPaths = new Set(state.files.map(file => file.path));
       renderFiles(state.files);
+      refreshPlan();
     }
     function clearFileSelection() {
       state.selectedPaths.clear();
       renderFiles(state.files);
+      refreshPlan();
     }
     function setFileSelected(path, selected) {
       if (selected) state.selectedPaths.add(path);
       else state.selectedPaths.delete(path);
       updateSelectionControls();
       updatePlan();
+      refreshPlan();
     }
     function updatePlan() {
       if (!state.files.length) {
@@ -947,6 +970,14 @@ HTML = r"""<!doctype html>
         return;
       }
       const groups = new Set(files.map(file => file.orientation));
+      if (state.plan) {
+        $("planText").textContent = t("planCounts", {
+          copy: state.plan.copy_count || 0,
+          transcode: state.plan.transcode_count || 0,
+          skipped: state.plan.skipped_count || 0
+        });
+        return;
+      }
       if (state.mode === "fast") {
         $("planText").textContent = t("fastPlan");
       } else if (state.mode === "optimal") {
@@ -966,12 +997,13 @@ HTML = r"""<!doctype html>
       Object.entries(by).forEach(([orientation, group]) => {
         const w = Math.max(...group.map(file => file.display_width));
         const h = Math.max(...group.map(file => file.display_height));
-        rows.insertAdjacentHTML("beforeend", `<tr class="group-row"><td colspan="9">${escapeHtml(t("groupLabel", { orientation, size: `${w}x${h}` }))}</td></tr>`);
+        rows.insertAdjacentHTML("beforeend", `<tr class="group-row"><td colspan="10">${escapeHtml(t("groupLabel", { orientation, size: `${w}x${h}` }))}</td></tr>`);
         group.forEach(file => {
-          const cls = file.fast_ready ? "status-ok" : "status-warn";
-          const status = file.fast_ready ? t("ready") : t("needsTranscode");
+          const action = file.planned_action || "unknown";
+          const cls = action === "copy" ? "status-ok" : "status-warn";
+          const statusKeys = { copy: "ready", transcode: "needsTranscode", skipped: "skipped", excluded: "excluded" };
+          const status = t(statusKeys[action] || "needsTranscode");
           const checked = state.selectedPaths.has(file.path) ? "checked" : "";
-          const timeTitle = `Created: ${file.created_time || "-"} | Modified: ${file.modified_time || "-"} | ${file.path}`;
           rows.insertAdjacentHTML("beforeend", `
             <tr>
               <td class="select-cell"><input class="file-checkbox" type="checkbox" data-path="${escapeHtml(file.path)}" ${checked}></td>
@@ -980,7 +1012,8 @@ HTML = r"""<!doctype html>
               <td class="mono">${escapeHtml(file.video_codec)}/${escapeHtml(file.audio_codec || "none")}</td>
               <td class="mono">${escapeHtml(file.fps)}</td>
               <td class="mono">${escapeHtml(file.duration)}</td>
-              <td class="mono" title="${escapeHtml(timeTitle)}">${escapeHtml(file.file_time || "-")}</td>
+              <td class="mono" title="${escapeHtml(file.path)}">${escapeHtml(file.created_time || "-")}</td>
+              <td class="mono" title="${escapeHtml(file.path)}">${escapeHtml(file.modified_time || "-")}</td>
               <td class="mono">${escapeHtml(file.file_size || "-")}</td>
               <td class="${cls}">${escapeHtml(status)}</td>
             </tr>`);
@@ -992,6 +1025,36 @@ HTML = r"""<!doctype html>
       });
       updateSelectionControls();
       updatePlan();
+    }
+    function planPayload() {
+      return {
+        mode: state.mode,
+        output_format: $("format").value,
+        video_codec: $("codec").value,
+        audio_codec: $("audioCodec").value,
+        fps_policy: $("fpsPolicy").value,
+        resolution_policy: $("resolutionPolicy").value,
+        selected_files: Array.from(state.selectedPaths)
+      };
+    }
+    function applyPlan(payload) {
+      state.files = payload.files || state.files;
+      state.plan = payload.plan || null;
+      renderFiles(state.files);
+    }
+    let planTimer = null;
+    let planVersion = 0;
+    function refreshPlan() {
+      if (!state.files.length) return;
+      if (planTimer) clearTimeout(planTimer);
+      const version = ++planVersion;
+      planTimer = setTimeout(async () => {
+        try {
+          const payload = await api("/plan", planPayload());
+          if (version === planVersion) applyPlan(payload);
+        }
+        catch (error) { log(`ERROR: ${error.message}`); }
+      }, 120);
     }
     async function selectFolder(kind) {
       try {
@@ -1017,10 +1080,15 @@ HTML = r"""<!doctype html>
       progress(5);
       log(t("scanning", { path: state.inputDir }));
       try {
-        const payload = await api("/scan", { input_dir: state.inputDir, recursive: $("recursive").checked, sort_by: $("sortBy").value });
+        const payload = await api("/scan", { input_dir: state.inputDir, recursive: $("recursive").checked, sort_by: $("sortBy").value, ...planPayload() });
         state.files = payload.files;
+        state.plan = payload.plan || null;
         state.selectedPaths = new Set(payload.files.map(file => file.path));
-        renderFiles(payload.files);
+        if ((state.plan && state.plan.selected_count) !== payload.files.length) {
+          applyPlan(await api("/plan", planPayload()));
+        } else {
+          renderFiles(payload.files);
+        }
         progress(100);
         log(t("filesAnalyzed", { count: payload.files.length }));
       } catch (error) {
@@ -1055,6 +1123,7 @@ HTML = r"""<!doctype html>
           sort_by: $("sortBy").value,
           video_codec: $("codec").value,
           gpu: $("gpu").value,
+          gpu_workers: Number($("gpuWorkers").value),
           audio_codec: $("audioCodec").value,
           quality_profile: $("qualityProfile").value,
           crf: Number($("crf").value),
@@ -1167,6 +1236,7 @@ HTML = r"""<!doctype html>
       state.mode = card.dataset.mode;
       renderModes();
       scheduleSaveConfig();
+      refreshPlan();
     }));
     $("selectSource").addEventListener("click", () => selectFolder("source"));
     $("selectOutput").addEventListener("click", () => selectFolder("output"));
@@ -1195,7 +1265,7 @@ HTML = r"""<!doctype html>
       $("preset").value = defaults.preset;
       scheduleSaveConfig();
     });
-    ["format", "sortBy", "codec", "gpu", "audioCodec", "qualityProfile", "crf", "preset", "fpsPolicy", "resolutionPolicy", "padColor", "outputDir", "tempDir", "ffmpegPath", "ffprobePath", "recursive", "overwrite", "dryRun", "keepTemp", "autoDownloadDeps", "notifyOnComplete", "playSoundOnComplete"].forEach(id => {
+    ["format", "sortBy", "codec", "gpu", "gpuWorkers", "audioCodec", "qualityProfile", "crf", "preset", "fpsPolicy", "resolutionPolicy", "padColor", "outputDir", "tempDir", "ffmpegPath", "ffprobePath", "recursive", "overwrite", "dryRun", "keepTemp", "autoDownloadDeps", "notifyOnComplete", "playSoundOnComplete"].forEach(id => {
       const node = $(id);
       if (pathFields.includes(id)) {
         node.addEventListener("input", () => {
@@ -1205,6 +1275,9 @@ HTML = r"""<!doctype html>
       }
       node.addEventListener(node.type === "checkbox" ? "change" : "input", scheduleSaveConfig);
       node.addEventListener("change", scheduleSaveConfig);
+      if (["format", "codec", "audioCodec", "fpsPolicy", "resolutionPolicy"].includes(id)) {
+        node.addEventListener("change", refreshPlan);
+      }
     });
     $("ffmpegStatus").addEventListener("click", checkDeps);
     $("notifyOnComplete").addEventListener("change", async () => {
@@ -1258,6 +1331,7 @@ class GuiState:
         self.process: subprocess.Popen[str] | None = None
         self.cleanup_temp_on_cancel = True
         self.temp_paths: list[Path] = []
+        self.media_files: list[VideoFile] = []
         self.lock = threading.Lock()
 
     def log(self, message: str) -> None:
@@ -1273,6 +1347,14 @@ class GuiState:
     def snapshot(self) -> dict[str, object]:
         with self.lock:
             return {"logs": list(self.logs), "progress": self.progress, "running": self.running}
+
+    def set_media_files(self, files: list[VideoFile]) -> None:
+        with self.lock:
+            self.media_files = list(files)
+
+    def get_media_files(self) -> list[VideoFile]:
+        with self.lock:
+            return list(self.media_files)
 
     def begin_run(self, cleanup_temp_on_cancel: bool = True) -> bool:
         with self.lock:
@@ -1401,6 +1483,9 @@ def _make_handler(state: GuiState, api_token: str):
             if parsed.path == "/scan":
                 self._scan(payload)
                 return
+            if parsed.path == "/plan":
+                self._plan(payload)
+                return
             if parsed.path == "/merge":
                 self._merge(payload)
                 return
@@ -1486,11 +1571,28 @@ def _make_handler(state: GuiState, api_token: str):
                 media_files, failures = probe_files(paths, tools, logger)
                 if failures:
                     state.log(f"{len(failures)} file(s) could not be analyzed.")
-                files = _serialize_files(media_files)
+                state.set_media_files(media_files)
+                plan = _build_gui_plan(media_files, media_files, payload)
                 state.set_progress(100)
-                self._send_json({"files": files})
+                self._send_json(plan)
             except Exception as exc:
                 state.set_progress(0)
+                self._send_json({"error": str(exc)}, HTTPStatus.INTERNAL_SERVER_ERROR)
+
+        def _plan(self, payload: dict[str, object]) -> None:
+            try:
+                media_files = state.get_media_files()
+                selected_values = payload.get("selected_files", [])
+                if not isinstance(selected_values, list):
+                    selected_values = []
+                selected_paths = {
+                    str(path)
+                    for path in selected_values
+                    if isinstance(path, str)
+                }
+                selected = [file for file in media_files if str(file.path) in selected_paths]
+                self._send_json(_build_gui_plan(media_files, selected, payload))
+            except Exception as exc:
                 self._send_json({"error": str(exc)}, HTTPStatus.INTERNAL_SERVER_ERROR)
 
         def _merge(self, payload: dict[str, object]) -> None:
@@ -1548,7 +1650,10 @@ def _make_handler(state: GuiState, api_token: str):
     return Handler
 
 
-def _serialize_files(files: list[VideoFile]) -> list[dict[str, object]]:
+def _serialize_files(
+    files: list[VideoFile],
+    planned_actions: dict[Path, str] | None = None,
+) -> list[dict[str, object]]:
     fast_groups = group_fast(files)
     output = []
     for file in files:
@@ -1566,10 +1671,69 @@ def _serialize_files(files: list[VideoFile]) -> list[dict[str, object]]:
                 "duration": _format_duration(file.duration),
                 "orientation": file.orientation.value,
                 "fast_ready": fast_ready,
+                "planned_action": (planned_actions or {}).get(file.path, "unknown"),
                 **stat_info,
             }
         )
     return output
+
+
+def _build_gui_plan(
+    all_files: list[VideoFile],
+    selected_files: list[VideoFile],
+    payload: dict[str, object],
+) -> dict[str, object]:
+    mode = str(payload.get("mode") or MergeMode.optimal.value)
+    actions = {file.path: "excluded" for file in all_files}
+    targets: list[dict[str, object]] = []
+
+    if mode == MergeMode.fast.value:
+        for members in group_fast(selected_files).values():
+            action = "copy" if len(members) > 1 else "skipped"
+            for file in members:
+                actions[file.path] = action
+    elif mode == MergeMode.extreme.value:
+        for file in selected_files:
+            actions[file.path] = "transcode"
+    else:
+        groups = split_by_orientation(selected_files)
+        for orientation in (Orientation.landscape, Orientation.portrait):
+            files = groups.get(orientation, [])
+            if not files:
+                continue
+            plan = build_optimal_group_plan(
+                files,
+                output_format=str(payload.get("output_format") or "mp4"),
+                requested_video_codec=str(payload.get("video_codec") or "") or None,
+                requested_audio_codec=str(payload.get("audio_codec") or "") or None,
+                fps_policy=str(payload.get("fps_policy") or "majority"),
+                resolution_policy=str(payload.get("resolution_policy") or "dominant"),
+            )
+            actions.update(plan.actions)
+            targets.append(
+                {
+                    "orientation": orientation.value,
+                    "canvas": plan.canvas.label,
+                    "fps": round(plan.fps, 3),
+                    "video_codec": plan.codec_plan.video_codec,
+                    "audio_codec": plan.codec_plan.audio_codec,
+                    "copy_count": plan.copy_count,
+                    "transcode_count": plan.transcode_count,
+                }
+            )
+
+    counts = Counter(actions[file.path] for file in selected_files)
+    return {
+        "files": _serialize_files(all_files, actions),
+        "plan": {
+            "mode": mode,
+            "copy_count": counts["copy"],
+            "transcode_count": counts["transcode"],
+            "skipped_count": counts["skipped"],
+            "selected_count": len(selected_files),
+            "targets": targets,
+        },
+    }
 
 
 def _file_stat_info(path: Path) -> dict[str, object]:
@@ -1579,17 +1743,15 @@ def _file_stat_info(path: Path) -> dict[str, object]:
         return {
             "created_time": "",
             "modified_time": "",
-            "file_time": "",
             "file_size": "",
             "file_size_bytes": 0,
         }
-    created_timestamp = getattr(stat, "st_birthtime", None)
-    created_time = _format_timestamp(created_timestamp) if created_timestamp else ""
+    created_timestamp = getattr(stat, "st_birthtime", stat.st_ctime)
+    created_time = _format_timestamp(created_timestamp)
     modified_time = _format_timestamp(stat.st_mtime)
     return {
         "created_time": created_time,
         "modified_time": modified_time,
-        "file_time": created_time or modified_time,
         "file_size": _format_file_size(stat.st_size),
         "file_size_bytes": stat.st_size,
     }
@@ -1813,6 +1975,8 @@ def _build_merge_command(payload: dict[str, object]) -> list[str]:
         cmd.extend(["--video-codec", str(payload["video_codec"])])
     if payload.get("gpu"):
         cmd.extend(["--gpu", str(payload["gpu"])])
+    if payload.get("gpu_workers"):
+        cmd.extend(["--gpu-workers", str(payload["gpu_workers"])])
     if payload.get("audio_codec"):
         cmd.extend(["--audio-codec", str(payload["audio_codec"])])
     if payload.get("quality_profile"):

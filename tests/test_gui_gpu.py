@@ -6,7 +6,13 @@ import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
 
-from videomerge.gui import _build_merge_command, _detect_gui_ffmpeg_encoders, _serialize_files, _windows_notification_script
+from videomerge.gui import (
+    _build_gui_plan,
+    _build_merge_command,
+    _detect_gui_ffmpeg_encoders,
+    _serialize_files,
+    _windows_notification_script,
+)
 from videomerge.models import Orientation, VideoFile
 
 
@@ -16,6 +22,11 @@ class GuiGpuTests(unittest.TestCase):
 
         self.assertIn("--gpu", command)
         self.assertEqual(command[command.index("--gpu") + 1], "auto")
+
+    def test_gui_command_includes_gpu_worker_limit(self) -> None:
+        command = _build_merge_command({"input_dir": "/tmp/in", "gpu_workers": 1})
+
+        self.assertEqual(command[command.index("--gpu-workers") + 1], "1")
 
     def test_gui_command_includes_temp_dir_option(self) -> None:
         command = _build_merge_command({"input_dir": "/tmp/in", "temp_dir": "/tmp/videomerge"})
@@ -54,9 +65,30 @@ class GuiGpuTests(unittest.TestCase):
             serialized = _serialize_files([_video(path)])[0]
 
         self.assertIn("modified_time", serialized)
-        self.assertIn("file_time", serialized)
+        self.assertIn("created_time", serialized)
+        self.assertNotIn("file_time", serialized)
         self.assertEqual(serialized["file_size"], "1.5 KB")
         self.assertEqual(serialized["file_size_bytes"], 1536)
+
+    def test_gui_optimal_status_uses_real_execution_plan(self) -> None:
+        ready = [_video(Path(f"ready_{index}.mp4")) for index in range(3)]
+        outlier = _video(Path("outlier.mp4")).__class__(
+            **{
+                **_video(Path("outlier.mp4")).__dict__,
+                "width": 3840,
+                "height": 2160,
+                "display_width": 3840,
+                "display_height": 2160,
+                "video_bitrate": 15_000_000,
+            }
+        )
+
+        payload = _build_gui_plan(ready + [outlier], ready + [outlier], {"mode": "optimal"})
+        actions = {item["name"]: item["planned_action"] for item in payload["files"]}
+
+        self.assertEqual(payload["plan"]["copy_count"], 3)
+        self.assertEqual(payload["plan"]["transcode_count"], 1)
+        self.assertEqual(actions["outlier.mp4"], "transcode")
 
     def test_windows_notification_script_uses_notify_icon_and_sound(self) -> None:
         script = _windows_notification_script("A&B's", "done", True)

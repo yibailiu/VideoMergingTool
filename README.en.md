@@ -87,12 +87,14 @@ Most users can use the desktop controls without typing any command. The table be
 | Temp Folder | `--temp-dir PATH` | Where temporary processing files are stored. Choose a fast disk with enough free space for large batches. |
 | Dry Run | `--dry-run` | Shows the planned work without actually running FFmpeg. |
 | GPU Acceleration | `--gpu off\|auto\|nvenc\|qsv\|amf\|videotoolbox` | Uses hardware encoding when available. `auto` is convenient; `off` is safest for compatibility. |
-| Target Video Codec | `--video-codec TEXT` | Overrides the output video codec. Leave default for H.264, or VP9 when output format is WebM. |
+| GPU Concurrent Jobs | `--gpu-workers 1-3` | Defaults to `1` to avoid GPU contention. Increase it manually on high-end hardware. |
+| Target Video Codec | `--video-codec TEXT` | Overrides the output video codec. Auto preserves the dominant source codec when compatible with the output container. |
 | Target Audio Codec | `--audio-codec TEXT` | Overrides the output audio codec. Compatible source audio is copied when possible and re-encoded only when needed. |
 | Quality Profile | `--quality-profile balanced\|high\|small` | Selects the size, clarity, and speed strategy. Default is `balanced`. |
 | Quality | `--crf 0-51` | Overrides the quality profile CRF. Lower values usually mean better quality and larger files. Balanced defaults to `23`. |
 | Encoder Preset | `--preset TEXT` | Overrides the quality profile encoder preset. Balanced defaults to `medium`. |
 | FPS Policy | `--fps-policy majority\|max\|min` | Chooses the target frame rate for transcode modes. `majority` is usually best. |
+| Resolution Policy | `--resolution-policy dominant\|largest` | Defaults to `dominant` to minimize transcoding. `largest` keeps the previous largest-canvas behavior. |
 | Padding Color | `--pad-color TEXT` | Color used when the app needs to add borders instead of cropping the image. Default is `black`. |
 | FFmpeg Path | `--ffmpeg-path PATH` | Optional manual path to `ffmpeg`. Packaged apps normally use the bundled copy. |
 | FFprobe Path | `--ffprobe-path PATH` | Optional manual path to `ffprobe`. Packaged apps normally use the bundled copy. |
@@ -106,6 +108,8 @@ Sort order values:
 | `name-natural-desc` | Natural filename order, Z to A. |
 | `name-asc` | Plain filename order, A to Z. Example: `1, 10, 2`. |
 | `name-desc` | Plain filename order, Z to A. |
+| `created-asc` | Oldest created file first. |
+| `created-desc` | Newest created file first. |
 | `modified-asc` | Oldest modified file first. |
 | `modified-desc` | Newest modified file first. |
 | `size-asc` | Smallest file first. |

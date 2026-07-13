@@ -87,12 +87,14 @@ Windows 和 macOS 安装包已经内置 FFmpeg / FFprobe，普通用户不需要
 | Temp Folder / 临时目录 | `--temp-dir PATH` | 存放临时处理文件的位置。大批量合并时建议选择空间充足的高速磁盘。 |
 | Dry Run / 试运行 | `--dry-run` | 只显示计划执行的操作，不真正调用 FFmpeg。 |
 | GPU Acceleration / GPU 加速 | `--gpu off\|auto\|nvenc\|qsv\|amf\|videotoolbox` | 可用时使用硬件编码。`auto` 更方便，`off` 兼容性最好。 |
-| Target Video Codec / 目标视频编码 | `--video-codec TEXT` | 指定输出视频编码。默认使用 H.264，WebM 输出默认 VP9。 |
+| GPU Concurrent Jobs / GPU 并发任务 | `--gpu-workers 1-3` | 默认 `1`，减少 GPU 资源争抢；高性能设备可手动提高。 |
+| Target Video Codec / 目标视频编码 | `--video-codec TEXT` | 指定输出视频编码。留空时优先保持主流源编码，WebM 输出会使用兼容编码。 |
 | Target Audio Codec / 目标音频编码 | `--audio-codec TEXT` | 指定输出音频编码。兼容源音频会尽量复制，只在必要时重编码。 |
 | Quality Profile / 质量策略 | `--quality-profile balanced\|high\|small` | 选择体积、清晰度和速度策略。默认 `balanced`。 |
 | Quality / 质量 | `--crf 0-51` | 覆盖质量策略的 CRF。数值越低通常质量越高、文件越大。默认均衡策略是 `23`。 |
 | Encoder Preset / 编码预设 | `--preset TEXT` | 覆盖质量策略的编码预设。默认均衡策略是 `medium`。 |
 | FPS Policy / 帧率策略 | `--fps-policy majority\|max\|min` | 转码模式下选择目标帧率。通常使用 `majority`。 |
+| Resolution Policy / 分辨率策略 | `--resolution-policy dominant\|largest` | 默认 `dominant`，以主流源规格减少转码；`largest` 会使用最大画布。 |
 | Padding Color / 补边颜色 | `--pad-color TEXT` | 需要补边时使用的颜色，默认 `black`。 |
 | FFmpeg Path / FFmpeg 路径 | `--ffmpeg-path PATH` | 手动指定 `ffmpeg` 路径。安装包通常会使用内置版本。 |
 | FFprobe Path / FFprobe 路径 | `--ffprobe-path PATH` | 手动指定 `ffprobe` 路径。安装包通常会使用内置版本。 |
@@ -106,6 +108,8 @@ Windows 和 macOS 安装包已经内置 FFmpeg / FFprobe，普通用户不需要
 | `name-natural-desc` | 文件名自然降序。 |
 | `name-asc` | 普通文件名升序。例如：`1, 10, 2`。 |
 | `name-desc` | 普通文件名降序。 |
+| `created-asc` | 创建时间从旧到新。 |
+| `created-desc` | 创建时间从新到旧。 |
 | `modified-asc` | 修改时间从旧到新。 |
 | `modified-desc` | 修改时间从新到旧。 |
 | `size-asc` | 文件大小从小到大。 |

@@ -1,10 +1,22 @@
 from __future__ import annotations
 
 from collections import Counter, defaultdict
+from dataclasses import dataclass
+from statistics import median
 from typing import Iterable
 
 from .models import Canvas, CodecPlan, FastGroupKey, Orientation, VideoFile
 from .utils import ensure_even
+
+
+@dataclass(frozen=True)
+class DominantSourceProfile:
+    files: tuple[VideoFile, ...]
+    canvas: Canvas
+    fps: float
+    video_codec: str
+    audio_codec: str | None
+    video_bitrate: int
 
 
 def group_fast(files: Iterable[VideoFile]) -> dict[FastGroupKey, list[VideoFile]]:
@@ -45,9 +57,17 @@ def majority_codec_plan(
     default_video_codec: str = "h264",
 ) -> CodecPlan:
     file_list = list(files)
-    video_codec = requested_video_codec or default_video_codec
+    source_video_codec = _most_common(
+        [_normalize_video_codec(file.video_codec) for file in file_list if file.video_codec],
+        default_video_codec,
+    )
+    video_codec = requested_video_codec or (
+        source_video_codec
+        if source_video_codec in {"h264", "hevc", "vp8", "vp9", "av1"}
+        else default_video_codec
+    )
     audio_codec = requested_audio_codec or _most_common(
-        [file.audio_codec for file in file_list if file.audio_codec],
+        [_normalize_audio_codec(file.audio_codec) for file in file_list if file.audio_codec],
         "aac",
     )
     return CodecPlan(
@@ -63,6 +83,57 @@ def choose_canvas(files: Iterable[VideoFile]) -> Canvas:
     width = max(file.display_width for file in file_list)
     height = max(file.display_height for file in file_list)
     return Canvas(width=ensure_even(width), height=ensure_even(height))
+
+
+def choose_dominant_source_profile(files: Iterable[VideoFile]) -> DominantSourceProfile:
+    file_list = list(files)
+    if not file_list:
+        raise ValueError("Cannot choose a source profile from an empty file list.")
+
+    copy_candidates = [
+        file
+        for file in file_list
+        if file.path.suffix.lower() in {".mp4", ".m4v", ".mov"}
+        and file.rotation == 0
+        and file.pixel_format == "yuv420p"
+        and file.has_audio
+    ]
+    candidate_pool = copy_candidates or file_list
+    grouped: dict[tuple[object, ...], list[VideoFile]] = defaultdict(list)
+    for file in candidate_pool:
+        grouped[_source_profile_key(file)].append(file)
+
+    def candidate_score(item: tuple[tuple[object, ...], list[VideoFile]]) -> tuple[float, int, float, int]:
+        key, members = item
+        width = int(key[2])
+        height = int(key[3])
+        target_pixels = max(width * height, 1)
+        member_paths = {file.path for file in members}
+        transcode_cost = sum(
+            max(file.duration, 0.1) * target_pixels
+            for file in file_list
+            if file.path not in member_paths
+        )
+        matching_duration = sum(max(file.duration, 0.1) for file in members)
+        return transcode_cost, -len(members), -matching_duration, target_pixels
+
+    selected_key, selected_files = min(grouped.items(), key=candidate_score)
+    bitrates = [file.video_bitrate for file in selected_files if file.video_bitrate > 0]
+    if not bitrates:
+        bitrates = [file.video_bitrate for file in file_list if file.video_bitrate > 0]
+    if not bitrates:
+        bitrates = [bitrate for bitrate in (_estimated_video_bitrate(file) for file in selected_files) if bitrate > 0]
+    fps = selected_files[0].frame_rate_float
+    if fps <= 0:
+        fps = choose_fps(selected_files, "majority")
+    return DominantSourceProfile(
+        files=tuple(selected_files),
+        canvas=Canvas(width=ensure_even(int(selected_key[2])), height=ensure_even(int(selected_key[3]))),
+        fps=fps,
+        video_codec=str(selected_key[0]),
+        audio_codec=str(selected_key[1]) or None,
+        video_bitrate=int(median(bitrates)) if bitrates else 0,
+    )
 
 
 def choose_fps(files: Iterable[VideoFile], policy: str) -> float:
@@ -108,3 +179,49 @@ def _most_common(values: list[str], default: str) -> str:
     if not values:
         return default
     return Counter(values).most_common(1)[0][0]
+
+
+def _source_profile_key(file: VideoFile) -> tuple[object, ...]:
+    return (
+        _normalize_video_codec(file.video_codec),
+        _normalize_audio_codec(file.audio_codec),
+        file.display_width,
+        file.display_height,
+        file.frame_rate,
+        file.pixel_format,
+        file.rotation,
+        file.audio_sample_rate,
+        file.audio_channels,
+    )
+
+
+def _normalize_video_codec(codec: str | None) -> str:
+    normalized = (codec or "").lower()
+    if normalized in {"h264", "avc", "avc1", "libx264"}:
+        return "h264"
+    if normalized in {"hevc", "h265", "libx265"}:
+        return "hevc"
+    return normalized
+
+
+def _normalize_audio_codec(codec: str | None) -> str:
+    normalized = (codec or "").lower()
+    if normalized in {"aac", "mp4a"}:
+        return "aac"
+    if normalized in {"mp3", "libmp3lame"}:
+        return "mp3"
+    if normalized in {"opus", "libopus"}:
+        return "opus"
+    if normalized in {"vorbis", "libvorbis"}:
+        return "vorbis"
+    return normalized
+
+
+def _estimated_video_bitrate(file: VideoFile) -> int:
+    if file.duration <= 0:
+        return 0
+    try:
+        total_bitrate = int((file.path.stat().st_size * 8) / file.duration)
+    except OSError:
+        return 0
+    return max(0, total_bitrate - max(file.audio_bitrate, 0))

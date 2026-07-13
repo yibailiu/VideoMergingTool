@@ -48,8 +48,11 @@ def preprocess_group(
     gpu_plan: GpuPlan | None = None,
     temp_root: Path | None = None,
     progress_callback: Callable[[VideoFile], None] | None = None,
+    reference_files: list[VideoFile] | tuple[VideoFile, ...] | None = None,
+    target_video_bitrate: int = 0,
+    gpu_workers: int = 1,
 ) -> tuple[list[Path], tempfile.TemporaryDirectory[str] | None]:
-    audio_target = choose_audio_target(files, codec_plan)
+    audio_target = choose_audio_target(list(reference_files or files), codec_plan)
     logger.info(
         "Audio target: codec=%s sample_rate=%d channels=%d bitrate=%s",
         audio_target.encoder,
@@ -77,6 +80,35 @@ def preprocess_group(
             "Preprocess passthrough: %d ready file(s) match the dominant concat signature and will skip normalization.",
             passthrough_count,
         )
+    else:
+        passthrough_count = 0
+    transcode_files = len(files) - passthrough_count
+    transcode_jobs = sum(
+        1
+        for segment in segments
+        if not (
+            segment.copy_compatible
+            and passthrough_signature is not None
+            and _concat_signature(segment.files[0]) == passthrough_signature
+        )
+    )
+    logger.info(
+        "Preprocess plan: copy_files=%d transcode_files=%d transcode_jobs=%d gpu_workers=%d.",
+        passthrough_count,
+        transcode_files,
+        transcode_jobs,
+        min(max(1, gpu_workers), 3),
+    )
+    _log_size_estimate(
+        files,
+        segments,
+        passthrough_signature,
+        target_video_bitrate
+        if gpu_plan is not None and gpu_plan.encoder in {"h264_videotoolbox", "hevc_videotoolbox"}
+        else 0,
+        audio_target,
+        logger,
+    )
 
     temp_owner = (
         None
@@ -107,7 +139,7 @@ def preprocess_group(
                 segment=segment, output_path=output_path, temp_dir=temp_dir, index=idx + 1,
                 canvas=canvas, fps=fps, codec_plan=codec_plan, audio_target=audio_target,
                 tools=tools, logger=logger, pad_color=pad_color, crf=crf, preset=preset,
-                dry_run=dry_run, gpu_plan=gpu_plan
+                dry_run=dry_run, gpu_plan=gpu_plan, target_video_bitrate=target_video_bitrate
             )
             processed_paths = [processed_path]
         else:
@@ -115,16 +147,13 @@ def preprocess_group(
                 file=segment.files[0], output_path=output_path, canvas=canvas, fps=fps,
                 codec_plan=codec_plan, audio_target=audio_target, tools=tools, logger=logger,
                 pad_color=pad_color, crf=crf, preset=preset, dry_run=dry_run, gpu_plan=gpu_plan,
-                force_video_transcode=True
+                force_video_transcode=True, target_video_bitrate=target_video_bitrate
             )
             processed_paths = [processed_path]
         return idx, processed_paths
 
-    # 【智能并发调度】
-    # 如果用户启用了 GPU，启用 3 个并发任务榨干硬件吞吐量；
-    # 如果用户禁用了 GPU (使用纯 CPU x264)，则保持单线程，避免 CPU 多实例互相抢占导致整体变慢。
     is_gpu_enabled = gpu_plan is not None and gpu_plan.enabled
-    max_workers = min(3, len(segments)) if is_gpu_enabled else 1
+    max_workers = min(max(1, gpu_workers), 3, len(segments)) if is_gpu_enabled else 1
 
     if max_workers > 1 and len(segments) > 1:
         logger.info("Using parallel processing with %d workers (GPU enabled).", max_workers)
@@ -168,6 +197,7 @@ def preprocess_copy_segment(
     preset: str,
     dry_run: bool,
     gpu_plan: GpuPlan | None = None,
+    target_video_bitrate: int = 0,
 ) -> Path:
     first = segment.files[0]
     source_path = first.path
@@ -206,6 +236,7 @@ def preprocess_copy_segment(
         dry_run=dry_run,
         gpu_plan=gpu_plan,
         force_video_transcode=True,
+        target_video_bitrate=target_video_bitrate,
     )
 
 
@@ -224,6 +255,7 @@ def preprocess_file(
     gpu_plan: GpuPlan | None = None,
     audio_target: AudioTarget | None = None,
     force_video_transcode: bool = False,
+    target_video_bitrate: int = 0,
 ) -> Path:
     audio_target = audio_target or choose_audio_target([file], codec_plan)
     video_action = choose_video_action(file, canvas, fps, codec_plan)
@@ -306,6 +338,7 @@ def preprocess_file(
                     canvas.width,
                     canvas.height,
                     fps,
+                    target_video_bitrate,
                 ),
                 "-pix_fmt",
                 "yuv420p",
@@ -435,6 +468,28 @@ def choose_passthrough_signature(segments: list[PreprocessSegment]) -> tuple[obj
     return Counter(ready_signatures).most_common(1)[0][0]
 
 
+def plan_preprocess_actions(
+    files: list[VideoFile],
+    canvas: Canvas,
+    fps: float,
+    codec_plan: CodecPlan,
+    reference_files: list[VideoFile] | tuple[VideoFile, ...] | None = None,
+) -> dict[Path, str]:
+    audio_target = choose_audio_target(list(reference_files or files), codec_plan)
+    segments = build_preprocess_segments(files, canvas, fps, codec_plan, audio_target)
+    passthrough_signature = choose_passthrough_signature(segments)
+    actions: dict[Path, str] = {}
+    for segment in segments:
+        passthrough = (
+            segment.copy_compatible
+            and passthrough_signature is not None
+            and _concat_signature(segment.files[0]) == passthrough_signature
+        )
+        for file in segment.files:
+            actions[file.path] = "copy" if passthrough else "transcode"
+    return actions
+
+
 def _concat_signature(file: VideoFile) -> tuple[object, ...]:
     return (
         _normalize_video_codec(file.video_codec),
@@ -523,6 +578,54 @@ def _normalize_audio_codec(codec: str) -> str:
     if normalized in {"vorbis", "libvorbis"}:
         return "vorbis"
     return normalized
+
+
+def _log_size_estimate(
+    files: list[VideoFile],
+    segments: list[PreprocessSegment],
+    passthrough_signature: tuple[object, ...] | None,
+    target_video_bitrate: int,
+    audio_target: AudioTarget,
+    logger: logging.Logger,
+) -> None:
+    if target_video_bitrate <= 0:
+        return
+    source_sizes: dict[Path, int] = {}
+    for file in files:
+        try:
+            source_sizes[file.path] = file.path.stat().st_size
+        except OSError:
+            return
+    source_total = sum(source_sizes.values())
+    if source_total <= 0:
+        return
+
+    audio_bitrate = int(audio_target.bitrate.removesuffix("k")) * 1000
+    estimated_total = 0
+    for segment in segments:
+        passthrough = (
+            segment.copy_compatible
+            and passthrough_signature is not None
+            and _concat_signature(segment.files[0]) == passthrough_signature
+        )
+        for file in segment.files:
+            if passthrough:
+                estimated_total += source_sizes[file.path]
+            else:
+                estimated_total += int(max(file.duration, 0.1) * (target_video_bitrate + audio_bitrate) / 8)
+
+    ratio = estimated_total / source_total
+    logger.info(
+        "Estimated output size: %.2f GiB (source %.2f GiB, ratio %.2fx).",
+        estimated_total / (1024**3),
+        source_total / (1024**3),
+        ratio,
+    )
+    if ratio > 1.5:
+        logger.warning(
+            "Estimated output exceeds source size by %.2fx. Consider dominant resolution or a smaller quality profile.",
+            ratio,
+        )
 
 
 def build_video_filter(rotation: int, canvas: Canvas, fps: float, pad_color: str) -> str:

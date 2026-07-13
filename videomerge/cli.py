@@ -10,12 +10,20 @@ import typer
 
 from .env_check import default_tools_dir, resolve_tools
 from .errors import CommandError, DependencyError, VideoMergeError
-from .grouping import choose_canvas, choose_fps, group_fast, majority_codec_plan, split_by_orientation
+from .grouping import (
+    choose_canvas,
+    choose_dominant_source_profile,
+    choose_fps,
+    group_fast,
+    majority_codec_plan,
+    split_by_orientation,
+)
 from .gpu import GpuMode, apply_gpu_encoder, resolve_gpu_plan
 from .logger import setup_logging
 from .merge import concat_copy, warn_container_compatibility
 from .models import CodecPlan, MergeMode, MergeResult, Orientation, VideoFile
 from .naming import SUPPORTED_OUTPUT_FORMATS, auto_name, prepare_output_dir, unique_output_path
+from .planning import build_optimal_group_plan
 from .probe import probe_files
 from .scanner import SORT_OPTIONS, VIDEO_EXTENSIONS, scan_video_files
 from .transcode import preprocess_group
@@ -48,7 +56,7 @@ def merge(
     output_format: str = typer.Option("mp4", "--output-format", help="mp4, mkv, mov, avi, ts, webm."),
     name: Optional[str] = typer.Option(None, "--name", help="Custom output filename without extension."),
     recursive: bool = typer.Option(True, "--recursive/--no-recursive", help="Scan subdirectories."),
-    sort_by: str = typer.Option("name-natural-asc", "--sort-by", help="Merge order: name-natural-asc, name-natural-desc, name-asc, name-desc, modified-asc, modified-desc, size-asc, size-desc."),
+    sort_by: str = typer.Option("name-natural-asc", "--sort-by", help="Merge order: name-natural-asc, name-natural-desc, name-asc, name-desc, created-asc, created-desc, modified-asc, modified-desc, size-asc, size-desc."),
     overwrite: bool = typer.Option(False, "--overwrite", help="Overwrite existing output files."),
     keep_temp: bool = typer.Option(False, "--keep-temp", help="Keep temporary preprocessed files."),
     temp_dir: Optional[Path] = typer.Option(None, "--temp-dir", help="Directory used for temporary preprocessing and concat files."),
@@ -56,13 +64,14 @@ def merge(
     dry_run: bool = typer.Option(False, "--dry-run", help="Print actions without running FFmpeg."),
     pad_color: str = typer.Option("black", "--pad-color", help="Padding color used for transcode modes."),
     fps_policy: str = typer.Option("majority", "--fps-policy", help="majority, max, or min."),
-    resolution_policy: str = typer.Option("largest", "--resolution-policy", help="Currently supports largest."),
+    resolution_policy: str = typer.Option("dominant", "--resolution-policy", help="dominant or largest."),
     video_codec: Optional[str] = typer.Option(None, "--video-codec", help="Override target video codec."),
     audio_codec: Optional[str] = typer.Option(None, "--audio-codec", help="Override target audio codec."),
     quality_profile: str = typer.Option("balanced", "--quality-profile", help="Quality profile: balanced, high, or small."),
     crf: Optional[int] = typer.Option(None, "--crf", min=0, max=51, help="Video CRF for transcode modes. Overrides --quality-profile."),
     preset: Optional[str] = typer.Option(None, "--preset", help="FFmpeg encoder preset. Overrides --quality-profile."),
     gpu: GpuMode = typer.Option(GpuMode.off, "--gpu", help="GPU acceleration: off, auto, nvenc, qsv, amf, videotoolbox."),
+    gpu_workers: int = typer.Option(1, "--gpu-workers", min=1, max=3, help="Concurrent GPU transcode jobs (1-3)."),
     ffmpeg_path: Optional[Path] = typer.Option(None, "--ffmpeg-path", help="Explicit ffmpeg path."),
     ffprobe_path: Optional[Path] = typer.Option(None, "--ffprobe-path", help="Explicit ffprobe path."),
     selected_files: Optional[Path] = typer.Option(
@@ -142,11 +151,13 @@ def merge(
                 keep_temp=keep_temp,
                 pad_color=pad_color,
                 fps_policy=fps_policy,
+                resolution_policy=resolution_policy,
                 video_codec=video_codec,
                 audio_codec=audio_codec,
                 crf=int(quality["crf"]),
                 preset=str(quality["preset"]),
                 gpu=gpu,
+                gpu_workers=gpu_workers,
                 temp_dir=temp_dir,
                 progress=progress,
             )
@@ -169,6 +180,7 @@ def merge(
                 crf=int(quality["crf"]),
                 preset=str(quality["preset"]),
                 gpu=gpu,
+                gpu_workers=gpu_workers,
                 temp_dir=temp_dir,
                 progress=progress,
             )
@@ -231,8 +243,8 @@ def _validate_cli(
         raise VideoMergeError(f"Unsupported output format: {output_format}")
     if fps_policy not in {"majority", "max", "min"}:
         raise VideoMergeError("Invalid --fps-policy. Use majority, max, or min.")
-    if resolution_policy != "largest":
-        raise VideoMergeError("Only --resolution-policy largest is currently supported.")
+    if resolution_policy not in {"dominant", "largest"}:
+        raise VideoMergeError("Invalid --resolution-policy. Use dominant or largest.")
     if sort_by not in SORT_OPTIONS:
         raise VideoMergeError(f"Invalid --sort-by. Use one of: {', '.join(sorted(SORT_OPTIONS))}.")
     if quality_profile not in {"balanced", "high", "small"}:
@@ -351,28 +363,17 @@ def _run_optimal(
     keep_temp: bool,
     pad_color: str,
     fps_policy: str,
+    resolution_policy: str,
     video_codec: str | None,
     audio_codec: str | None,
     crf: int,
     preset: str,
     gpu: GpuMode,
+    gpu_workers: int,
     temp_dir: Path | None,
     progress: ProgressReporter,
 ) -> list[MergeResult]:
     logger.info("Mode: optimal. Files will be split into landscape and portrait outputs.")
-    codec_plan = _container_adjusted_plan(
-        majority_codec_plan(
-            media_files,
-            video_codec,
-            audio_codec,
-            default_video_codec=_default_transcode_video_codec(output_format),
-        ),
-        output_format,
-        logger,
-    )
-    gpu_plan = resolve_gpu_plan(tools, gpu, codec_plan.video_codec, logger)
-    codec_plan = apply_gpu_encoder(codec_plan, gpu_plan)
-    logger.info("Target codecs: video=%s audio=%s", codec_plan.video_codec, codec_plan.audio_codec)
     groups = split_by_orientation(media_files)
     results: list[MergeResult] = []
     temp_owners = []
@@ -382,8 +383,32 @@ def _run_optimal(
         if not files:
             logger.info("No %s videos found; skipping that output.", orientation.value)
             continue
-        canvas = choose_canvas(files)
-        fps = choose_fps(files, fps_policy)
+        plan = build_optimal_group_plan(
+            files,
+            output_format=output_format,
+            requested_video_codec=video_codec,
+            requested_audio_codec=audio_codec,
+            fps_policy=fps_policy,
+            resolution_policy=resolution_policy,
+        )
+        profile = plan.profile
+        codec_plan = plan.codec_plan
+        gpu_plan = resolve_gpu_plan(tools, gpu, codec_plan.video_codec, logger)
+        codec_plan = apply_gpu_encoder(codec_plan, gpu_plan)
+        canvas = plan.canvas
+        fps = plan.fps
+        logger.info(
+            "Optimal target: orientation=%s canvas=%s fps=%.3f video=%s audio=%s "
+            "reference_files=%d reference_bitrate=%dkbps resolution_policy=%s",
+            orientation.value,
+            canvas.label,
+            fps,
+            codec_plan.video_codec,
+            codec_plan.audio_codec,
+            len(profile.files),
+            round(profile.video_bitrate / 1000),
+            resolution_policy,
+        )
         warn_container_compatibility(output_format, codec_plan.output_video_encoder, codec_plan.output_audio_encoder, logger)
         preprocessed, owner = preprocess_group(
             files=files,
@@ -400,6 +425,9 @@ def _run_optimal(
             gpu_plan=gpu_plan,
             temp_root=temp_dir,
             progress_callback=lambda file: progress.advance(1, f"preprocessed {file.path.name}"),
+            reference_files=profile.files,
+            target_video_bitrate=profile.video_bitrate,
+            gpu_workers=gpu_workers,
         )
         if owner:
             temp_owners.append(owner)
@@ -432,6 +460,7 @@ def _run_extreme(
     crf: int,
     preset: str,
     gpu: GpuMode,
+    gpu_workers: int,
     temp_dir: Path | None,
     progress: ProgressReporter,
 ) -> list[MergeResult]:
@@ -473,6 +502,8 @@ def _run_extreme(
         gpu_plan=gpu_plan,
         temp_root=temp_dir,
         progress_callback=lambda file: progress.advance(1, f"preprocessed {file.path.name}"),
+        target_video_bitrate=choose_dominant_source_profile(media_files).video_bitrate,
+        gpu_workers=gpu_workers,
     )
     base_name = name or auto_name(input_dir.name, "extreme", canvas.label)
     output_path = unique_output_path(output_dir, base_name, output_format, overwrite)

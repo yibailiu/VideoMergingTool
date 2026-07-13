@@ -58,6 +58,25 @@ class GpuTests(unittest.TestCase):
         self.assertIn("-allow_sw", args)
         self.assertNotIn("-crf", args)
 
+    def test_videotoolbox_balanced_quality_uses_dominant_source_bitrate(self) -> None:
+        args = gpu_encoder_quality_args(
+            "h264_videotoolbox",
+            23,
+            "medium",
+            3840,
+            2160,
+            30,
+            source_bitrate=4_000_000,
+        )
+
+        self.assertEqual(args[args.index("-b:v") + 1], "4000k")
+        self.assertEqual(args[args.index("-maxrate") + 1], "5000k")
+
+    def test_videotoolbox_4k_fallback_no_longer_uses_60_mbps(self) -> None:
+        args = gpu_encoder_quality_args("h264_videotoolbox", 23, "medium", 3840, 2160, 30)
+
+        self.assertLess(int(args[args.index("-b:v") + 1].removesuffix("k")), 30_000)
+
     def test_unsupported_codec_falls_back_to_cpu(self) -> None:
         tools = ToolPaths(ffmpeg=Path("ffmpeg"), ffprobe=Path("ffprobe"))
         with patch("videomerge.gpu.detect_ffmpeg_encoders", return_value={"h264_videotoolbox"}):
