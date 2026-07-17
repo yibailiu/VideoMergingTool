@@ -25,7 +25,7 @@ from .models import CodecPlan, MergeMode, MergeResult, Orientation, VideoFile
 from .naming import SUPPORTED_OUTPUT_FORMATS, auto_name, prepare_output_dir, unique_output_path
 from .planning import build_optimal_group_plan
 from .probe import probe_files
-from .scanner import SORT_OPTIONS, VIDEO_EXTENSIONS, scan_video_files
+from .scanner import SORT_OPTIONS, VIDEO_EXTENSIONS, scan_video_files, sort_probed_files
 from .transcode import preprocess_group
 
 app = typer.Typer(help="Local batch video merging tool powered by FFmpeg.", no_args_is_help=True)
@@ -56,7 +56,7 @@ def merge(
     output_format: str = typer.Option("mp4", "--output-format", help="mp4, mkv, mov, avi, ts, webm."),
     name: Optional[str] = typer.Option(None, "--name", help="Custom output filename without extension."),
     recursive: bool = typer.Option(True, "--recursive/--no-recursive", help="Scan subdirectories."),
-    sort_by: str = typer.Option("name-natural-asc", "--sort-by", help="Merge order: name-natural-asc, name-natural-desc, name-asc, name-desc, created-asc, created-desc, modified-asc, modified-desc, size-asc, size-desc."),
+    sort_by: str = typer.Option("name-natural-asc", "--sort-by", help="Merge order: name-natural-asc, name-natural-desc, name-asc, name-desc, media-created-asc, media-created-desc, size-asc, size-desc."),
     overwrite: bool = typer.Option(False, "--overwrite", help="Overwrite existing output files."),
     keep_temp: bool = typer.Option(False, "--keep-temp", help="Keep temporary preprocessed files."),
     temp_dir: Optional[Path] = typer.Option(None, "--temp-dir", help="Directory used for temporary preprocessing and concat files."),
@@ -115,6 +115,8 @@ def merge(
             raise VideoMergeError("No recognized video files found.")
 
         media_files, failures = probe_files(paths, tools, logger)
+        if not selected_files:
+            media_files = sort_probed_files(media_files, input_dir, sort_by)
         if failures:
             for path, reason in failures.items():
                 logger.warning("Probe failure: %s | %s", path, reason)

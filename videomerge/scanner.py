@@ -3,6 +3,8 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from .models import VideoFile
+
 
 VIDEO_EXTENSIONS = {
     ".mp4",
@@ -21,10 +23,8 @@ SORT_OPTIONS = {
     "name-natural-desc",
     "name-asc",
     "name-desc",
-    "created-asc",
-    "created-desc",
-    "modified-asc",
-    "modified-desc",
+    "media-created-asc",
+    "media-created-desc",
     "size-asc",
     "size-desc",
 }
@@ -49,12 +49,8 @@ def _sort_video_files(files: list[Path], input_dir: Path, sort_by: str) -> list[
         return sorted(files, key=lambda path: _natural_path_key(path, input_dir), reverse=reverse)
     if sort_by.startswith("name-"):
         return sorted(files, key=lambda path: _casefold_path_key(path, input_dir), reverse=reverse)
-    if sort_by.startswith("created-"):
-        natural_sorted = sorted(files, key=lambda path: _natural_path_key(path, input_dir))
-        return sorted(natural_sorted, key=_created_time_key, reverse=reverse)
-    if sort_by.startswith("modified-"):
-        natural_sorted = sorted(files, key=lambda path: _natural_path_key(path, input_dir))
-        return sorted(natural_sorted, key=lambda path: path.stat().st_mtime, reverse=reverse)
+    if sort_by.startswith("media-created-"):
+        return sorted(files, key=lambda path: _natural_path_key(path, input_dir))
     if sort_by.startswith("size-"):
         natural_sorted = sorted(files, key=lambda path: _natural_path_key(path, input_dir))
         return sorted(natural_sorted, key=lambda path: path.stat().st_size, reverse=reverse)
@@ -69,9 +65,18 @@ def _casefold_path_key(path: Path, root: Path) -> str:
     return str(relative).casefold()
 
 
-def _created_time_key(path: Path) -> float:
-    stat = path.stat()
-    return float(getattr(stat, "st_birthtime", stat.st_ctime))
+def sort_probed_files(files: list[VideoFile], input_dir: Path, sort_by: str) -> list[VideoFile]:
+    if not sort_by.startswith("media-created-"):
+        return files
+
+    natural_sorted = sorted(files, key=lambda file: _natural_path_key(file.path, input_dir))
+    dated = [file for file in natural_sorted if file.media_created_at is not None]
+    undated = [file for file in natural_sorted if file.media_created_at is None]
+    return sorted(
+        dated,
+        key=lambda file: file.media_created_at or 0.0,
+        reverse=sort_by.endswith("-desc"),
+    ) + undated
 
 
 def _natural_path_key(path: Path, root: Path) -> tuple[tuple[int, object], ...]:

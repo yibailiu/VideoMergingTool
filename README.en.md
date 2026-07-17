@@ -108,10 +108,8 @@ Sort order values:
 | `name-natural-desc` | Natural filename order, Z to A. |
 | `name-asc` | Plain filename order, A to Z. Example: `1, 10, 2`. |
 | `name-desc` | Plain filename order, Z to A. |
-| `created-asc` | Oldest created file first. |
-| `created-desc` | Newest created file first. |
-| `modified-asc` | Oldest modified file first. |
-| `modified-desc` | Newest modified file first. |
+| `media-created-asc` | Oldest media creation date first; files without media dates are placed last. |
+| `media-created-desc` | Newest media creation date first; files without media dates are placed last. |
 | `size-asc` | Smallest file first. |
 | `size-desc` | Largest file first. |
 

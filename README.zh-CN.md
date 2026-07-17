@@ -108,10 +108,8 @@ Windows 和 macOS 安装包已经内置 FFmpeg / FFprobe，普通用户不需要
 | `name-natural-desc` | 文件名自然降序。 |
 | `name-asc` | 普通文件名升序。例如：`1, 10, 2`。 |
 | `name-desc` | 普通文件名降序。 |
-| `created-asc` | 创建时间从旧到新。 |
-| `created-desc` | 创建时间从新到旧。 |
-| `modified-asc` | 修改时间从旧到新。 |
-| `modified-desc` | 修改时间从新到旧。 |
+| `media-created-asc` | 媒体元数据中的创建媒体日期从旧到新；无媒体日期的文件排在末尾。 |
+| `media-created-desc` | 媒体元数据中的创建媒体日期从新到旧；无媒体日期的文件排在末尾。 |
 | `size-asc` | 文件大小从小到大。 |
 | `size-desc` | 文件大小从大到小。 |
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import subprocess
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -61,6 +62,7 @@ def probe_file(path: Path, tools: ToolPaths, logger: logging.Logger) -> VideoFil
     audio_bitrate = _read_int(audio_stream.get("bit_rate")) if audio_stream else 0
     audio_sample_rate = _read_int(audio_stream.get("sample_rate")) if audio_stream else 0
     audio_channels = _read_int(audio_stream.get("channels")) if audio_stream else 0
+    media_created_at = _read_media_created_at(payload, video_stream)
 
     file = VideoFile(
         path=path,
@@ -83,6 +85,7 @@ def probe_file(path: Path, tools: ToolPaths, logger: logging.Logger) -> VideoFil
         audio_bitrate=audio_bitrate,
         audio_sample_rate=audio_sample_rate,
         audio_channels=audio_channels,
+        media_created_at=media_created_at,
     )
     logger.debug("Probed %s: %s", path, file)
     return file
@@ -132,6 +135,30 @@ def _read_int(value: object) -> int:
         return int(float(value))
     except (TypeError, ValueError):
         return 0
+
+
+def _read_media_created_at(payload: dict[str, Any], video_stream: dict[str, Any]) -> float | None:
+    format_tags = payload.get("format", {}).get("tags") or {}
+    stream_tags = video_stream.get("tags") or {}
+    for key in ("creation_time", "com.apple.quicktime.creationdate"):
+        for tags in (format_tags, stream_tags):
+            value = next((tag_value for tag_name, tag_value in tags.items() if tag_name.casefold() == key), None)
+            timestamp = _parse_media_timestamp(value)
+            if timestamp is not None:
+                return timestamp
+    return None
+
+
+def _parse_media_timestamp(value: object) -> float | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        return datetime.fromisoformat(text.replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return None
 
 
 def _read_rotation(video_stream: dict[str, Any]) -> int:

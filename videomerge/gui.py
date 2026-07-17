@@ -28,7 +28,7 @@ from .gpu import detect_ffmpeg_encoders
 from .models import MergeMode, Orientation, VideoFile
 from .planning import build_optimal_group_plan
 from .probe import probe_files
-from .scanner import scan_video_files
+from .scanner import scan_video_files, sort_probed_files
 from .utils import subprocess_window_kwargs
 from . import __version__
 
@@ -256,7 +256,7 @@ HTML = r"""<!doctype html>
       color: var(--text-muted);
       white-space: nowrap;
     }
-    table { width: 100%; min-width: 1240px; border-collapse: collapse; table-layout: fixed; }
+    table { width: 100%; min-width: 820px; border-collapse: collapse; table-layout: fixed; }
     th {
       position: sticky;
       top: 0;
@@ -555,14 +555,13 @@ HTML = r"""<!doctype html>
               <col style="width: 12%">
               <col style="width: 8%">
               <col style="width: 8%">
-              <col style="width: 13%">
-              <col style="width: 13%">
+              <col style="width: 16%">
               <col style="width: 9%">
               <col style="width: 8%">
             </colgroup>
             <thead>
               <tr>
-                <th class="select-head"></th><th data-i18n="filename">Filename</th><th data-i18n="resolution">Resolution</th><th data-i18n="codec">Codec</th><th>FPS</th><th data-i18n="duration">Dur</th><th data-i18n="createdTime">Created</th><th data-i18n="modifiedTime">Modified</th><th data-i18n="fileSize">Size</th><th data-i18n="status">Status</th>
+                <th class="select-head"></th><th data-i18n="filename">Filename</th><th data-i18n="resolution">Resolution</th><th data-i18n="codec">Codec</th><th>FPS</th><th data-i18n="duration">Dur</th><th data-i18n="mediaCreatedTime">Media Created</th><th data-i18n="fileSize">Size</th><th data-i18n="status">Status</th>
               </tr>
             </thead>
             <tbody id="fileRows"></tbody>
@@ -606,10 +605,8 @@ HTML = r"""<!doctype html>
             <option value="name-natural-desc" data-i18n="sortNameNaturalDesc">Filename natural (Z-A)</option>
             <option value="name-asc" data-i18n="sortNameAsc">Filename text (A-Z)</option>
             <option value="name-desc" data-i18n="sortNameDesc">Filename text (Z-A)</option>
-            <option value="created-asc" data-i18n="sortCreatedAsc">Created time (oldest first)</option>
-            <option value="created-desc" data-i18n="sortCreatedDesc">Created time (newest first)</option>
-            <option value="modified-asc" data-i18n="sortModifiedAsc">Modified time (oldest first)</option>
-            <option value="modified-desc" data-i18n="sortModifiedDesc">Modified time (newest first)</option>
+            <option value="media-created-asc" data-i18n="sortMediaCreatedAsc">Media created (oldest first)</option>
+            <option value="media-created-desc" data-i18n="sortMediaCreatedDesc">Media created (newest first)</option>
             <option value="size-asc" data-i18n="sortSizeAsc">File size (smallest first)</option>
             <option value="size-desc" data-i18n="sortSizeDesc">File size (largest first)</option>
           </select>
@@ -657,7 +654,7 @@ HTML = r"""<!doctype html>
     const messages = {
       en: {
         ffmpegNotChecked: "! FFmpeg Not Checked", ffmpegChecking: "... Checking FFmpeg", ffmpegInstalled: "✓ FFmpeg Installed", ffmpegMissing: "! FFmpeg Missing", refreshFfmpeg: "Refresh FFmpeg check",
-        sourceFiles: "Source Files", noFolderSelected: "No folder selected", selectFolder: "Select Folder", filename: "Filename", resolution: "Resolution", codec: "Codec", duration: "Dur", createdTime: "Created", modifiedTime: "Modified", fileSize: "Size", status: "Status",
+        sourceFiles: "Source Files", noFolderSelected: "No folder selected", selectFolder: "Select Folder", filename: "Filename", resolution: "Resolution", codec: "Codec", duration: "Dur", mediaCreatedTime: "Media Created", fileSize: "Size", status: "Status",
         processConsole: "Process Console", configuration: "Configuration", mergeStrategy: "Merge Strategy", outputSettings: "Output Settings", browse: "Browse",
         fastMerge: "Fast Merge", optimalMerge: "Optimal Merge", extremeMerge: "Extreme Merge", lossless: "Lossless", smart: "Smart", bruteForce: "Brute Force",
         fastDesc: "Stream copy only. Skips incompatible groups.", optimalDesc: "Groups by orientation and transcodes when needed.", extremeDesc: "Normalizes all files into one output.",
@@ -669,8 +666,8 @@ HTML = r"""<!doctype html>
         notifyOnComplete: "Completion Notification", playSoundOnComplete: "Completion Sound",
         outputDirHint: "Leave empty to use the default merged folder under the source directory.", tempDirHint: "Leave empty to use the system default temp directory.",
         sortNameNaturalAsc: "Filename natural (A-Z)", sortNameNaturalDesc: "Filename natural (Z-A)", sortNameAsc: "Filename text (A-Z)", sortNameDesc: "Filename text (Z-A)",
-        sortCreatedAsc: "Created time (oldest first)", sortCreatedDesc: "Created time (newest first)",
-        sortModifiedAsc: "Modified time (oldest first)", sortModifiedDesc: "Modified time (newest first)", sortSizeAsc: "File size (smallest first)", sortSizeDesc: "File size (largest first)",
+        sortMediaCreatedAsc: "Media created (oldest first)", sortMediaCreatedDesc: "Media created (newest first)",
+        sortSizeAsc: "File size (smallest first)", sortSizeDesc: "File size (largest first)",
         startMerge: "▷ START MERGE", stopMerge: "■ STOP MERGE", switchLanguage: "Switch language",
         modeSelected: "{mode} MODE SELECTED", selectFolderPlan: "Select a folder to preview the merge plan.",
         selectAllFiles: "Select All", clearFileSelection: "Clear Selection", selectedCount: "{selected}/{total} selected", noSelectedFiles: "Select at least one file to merge.",
@@ -710,7 +707,7 @@ HTML = r"""<!doctype html>
       },
       zh: {
         ffmpegNotChecked: "! FFmpeg 未检查", ffmpegChecking: "... 正在检查 FFmpeg", ffmpegInstalled: "✓ FFmpeg 已安装", ffmpegMissing: "! FFmpeg 缺失", refreshFfmpeg: "重新检查 FFmpeg",
-        sourceFiles: "源文件", noFolderSelected: "未选择文件夹", selectFolder: "选择文件夹", filename: "文件名", resolution: "分辨率", codec: "编码", duration: "时长", createdTime: "创建时间", modifiedTime: "修改时间", fileSize: "大小", status: "状态",
+        sourceFiles: "源文件", noFolderSelected: "未选择文件夹", selectFolder: "选择文件夹", filename: "文件名", resolution: "分辨率", codec: "编码", duration: "时长", mediaCreatedTime: "创建媒体日期", fileSize: "大小", status: "状态",
         processConsole: "处理控制台", configuration: "配置", mergeStrategy: "合并策略", outputSettings: "输出设置", browse: "浏览",
         fastMerge: "快速合并", optimalMerge: "智能合并", extremeMerge: "强制合并", lossless: "无损", smart: "智能", bruteForce: "强制",
         fastDesc: "仅使用流复制，跳过不兼容分组。", optimalDesc: "按横竖屏分组，必要时转码。", extremeDesc: "统一所有文件到一个输出。",
@@ -722,8 +719,8 @@ HTML = r"""<!doctype html>
         notifyOnComplete: "完成后提示", playSoundOnComplete: "完成提示音",
         outputDirHint: "留空时默认使用源目录下的 merged 文件夹。", tempDirHint: "留空时使用系统默认临时目录。",
         sortNameNaturalAsc: "文件名自然升序", sortNameNaturalDesc: "文件名自然降序", sortNameAsc: "文件名文本升序", sortNameDesc: "文件名文本降序",
-        sortCreatedAsc: "创建时间从旧到新", sortCreatedDesc: "创建时间从新到旧",
-        sortModifiedAsc: "修改时间从旧到新", sortModifiedDesc: "修改时间从新到旧", sortSizeAsc: "文件大小从小到大", sortSizeDesc: "文件大小从大到小",
+        sortMediaCreatedAsc: "创建媒体日期从旧到新", sortMediaCreatedDesc: "创建媒体日期从新到旧",
+        sortSizeAsc: "文件大小从小到大", sortSizeDesc: "文件大小从大到小",
         startMerge: "▷ 开始合并", stopMerge: "■ 停止合并", switchLanguage: "切换语言",
         modeSelected: "已选择 {mode} 模式", selectFolderPlan: "选择文件夹后预览合并计划。",
         selectAllFiles: "全选", clearFileSelection: "取消选中", selectedCount: "已选 {selected}/{total}", noSelectedFiles: "请至少选择一个要合并的视频文件。",
@@ -997,7 +994,7 @@ HTML = r"""<!doctype html>
       Object.entries(by).forEach(([orientation, group]) => {
         const w = Math.max(...group.map(file => file.display_width));
         const h = Math.max(...group.map(file => file.display_height));
-        rows.insertAdjacentHTML("beforeend", `<tr class="group-row"><td colspan="10">${escapeHtml(t("groupLabel", { orientation, size: `${w}x${h}` }))}</td></tr>`);
+        rows.insertAdjacentHTML("beforeend", `<tr class="group-row"><td colspan="9">${escapeHtml(t("groupLabel", { orientation, size: `${w}x${h}` }))}</td></tr>`);
         group.forEach(file => {
           const action = file.planned_action || "unknown";
           const cls = action === "copy" ? "status-ok" : "status-warn";
@@ -1012,8 +1009,7 @@ HTML = r"""<!doctype html>
               <td class="mono">${escapeHtml(file.video_codec)}/${escapeHtml(file.audio_codec || "none")}</td>
               <td class="mono">${escapeHtml(file.fps)}</td>
               <td class="mono">${escapeHtml(file.duration)}</td>
-              <td class="mono" title="${escapeHtml(file.path)}">${escapeHtml(file.created_time || "-")}</td>
-              <td class="mono" title="${escapeHtml(file.path)}">${escapeHtml(file.modified_time || "-")}</td>
+              <td class="mono" title="${escapeHtml(file.path)}">${escapeHtml(file.media_created_time || "-")}</td>
               <td class="mono">${escapeHtml(file.file_size || "-")}</td>
               <td class="${cls}">${escapeHtml(status)}</td>
             </tr>`);
@@ -1569,6 +1565,11 @@ def _make_handler(state: GuiState, api_token: str):
                 )
                 state.set_progress(25)
                 media_files, failures = probe_files(paths, tools, logger)
+                media_files = sort_probed_files(
+                    media_files,
+                    input_dir,
+                    str(payload.get("sort_by") or "name-natural-asc"),
+                )
                 if failures:
                     state.log(f"{len(failures)} file(s) could not be analyzed.")
                 state.set_media_files(media_files)
@@ -1658,7 +1659,7 @@ def _serialize_files(
     output = []
     for file in files:
         fast_ready = any(file in members and len(members) > 1 for members in fast_groups.values())
-        stat_info = _file_stat_info(file.path)
+        file_size_info = _file_size_info(file.path)
         output.append(
             {
                 "path": str(file.path),
@@ -1669,10 +1670,11 @@ def _serialize_files(
                 "audio_codec": file.audio_codec,
                 "fps": f"{file.frame_rate_float:.2f}" if file.frame_rate_float else file.frame_rate,
                 "duration": _format_duration(file.duration),
+                "media_created_time": _format_media_created_time(file.media_created_at),
                 "orientation": file.orientation.value,
                 "fast_ready": fast_ready,
                 "planned_action": (planned_actions or {}).get(file.path, "unknown"),
-                **stat_info,
+                **file_size_info,
             }
         )
     return output
@@ -1736,28 +1738,23 @@ def _build_gui_plan(
     }
 
 
-def _file_stat_info(path: Path) -> dict[str, object]:
+def _file_size_info(path: Path) -> dict[str, object]:
     try:
         stat = path.stat()
     except OSError:
         return {
-            "created_time": "",
-            "modified_time": "",
             "file_size": "",
             "file_size_bytes": 0,
         }
-    created_timestamp = getattr(stat, "st_birthtime", stat.st_ctime)
-    created_time = _format_timestamp(created_timestamp)
-    modified_time = _format_timestamp(stat.st_mtime)
     return {
-        "created_time": created_time,
-        "modified_time": modified_time,
         "file_size": _format_file_size(stat.st_size),
         "file_size_bytes": stat.st_size,
     }
 
 
-def _format_timestamp(timestamp: float) -> str:
+def _format_media_created_time(timestamp: float | None) -> str:
+    if timestamp is None:
+        return ""
     return datetime.fromtimestamp(timestamp).strftime("%Y-%m-%d %H:%M:%S")
 
 

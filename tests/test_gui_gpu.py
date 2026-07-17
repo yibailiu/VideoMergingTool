@@ -35,10 +35,10 @@ class GuiGpuTests(unittest.TestCase):
         self.assertEqual(command[command.index("--temp-dir") + 1], "/tmp/videomerge")
 
     def test_gui_command_includes_sort_option(self) -> None:
-        command = _build_merge_command({"input_dir": "/tmp/in", "sort_by": "modified-desc"})
+        command = _build_merge_command({"input_dir": "/tmp/in", "sort_by": "media-created-desc"})
 
         self.assertIn("--sort-by", command)
-        self.assertEqual(command[command.index("--sort-by") + 1], "modified-desc")
+        self.assertEqual(command[command.index("--sort-by") + 1], "media-created-desc")
 
     def test_gui_command_includes_quality_profile(self) -> None:
         command = _build_merge_command({"input_dir": "/tmp/in", "quality_profile": "small", "crf": 25})
@@ -58,15 +58,15 @@ class GuiGpuTests(unittest.TestCase):
 
         self.assertEqual(selected, ["/tmp/in/a.mp4", "/tmp/in/b.mp4"])
 
-    def test_serialize_files_includes_filesystem_time_and_size(self) -> None:
+    def test_serialize_files_includes_media_creation_date_and_file_size(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             path = Path(temp_dir) / "clip.mp4"
             path.write_bytes(b"x" * 1536)
-            serialized = _serialize_files([_video(path)])[0]
+            serialized = _serialize_files([_video(path, media_created_at=100.0)])[0]
 
-        self.assertIn("modified_time", serialized)
-        self.assertIn("created_time", serialized)
-        self.assertNotIn("file_time", serialized)
+        self.assertTrue(serialized["media_created_time"])
+        self.assertNotIn("modified_time", serialized)
+        self.assertNotIn("created_time", serialized)
         self.assertEqual(serialized["file_size"], "1.5 KB")
         self.assertEqual(serialized["file_size_bytes"], 1536)
 
@@ -108,7 +108,7 @@ class GuiGpuTests(unittest.TestCase):
         self.assertIn("h264_videotoolbox", encoders)
         self.assertEqual(detect.call_count, 2)
 
-def _video(path: Path) -> VideoFile:
+def _video(path: Path, media_created_at: float | None = None) -> VideoFile:
     return VideoFile(
         path=path,
         container="mp4",
@@ -130,6 +130,7 @@ def _video(path: Path) -> VideoFile:
         audio_bitrate=128_000,
         audio_sample_rate=48000,
         audio_channels=2,
+        media_created_at=media_created_at,
     )
 
 
