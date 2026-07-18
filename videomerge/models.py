@@ -48,6 +48,7 @@ class VideoFile:
     audio_sample_rate: int = 0
     audio_channels: int = 0
     media_created_at: Optional[float] = None
+    video_time_base: str = ""
 
     @property
     def stem_safe(self) -> str:

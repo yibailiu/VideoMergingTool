@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import subprocess
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -58,8 +59,10 @@ def probe_file(path: Path, tools: ToolPaths, logger: logging.Logger) -> VideoFil
     orientation = _orientation(display_width, display_height)
     frame_rate = video_stream.get("avg_frame_rate") or video_stream.get("r_frame_rate") or "0/0"
     duration = _read_duration(payload, video_stream)
-    video_bitrate = _read_int(video_stream.get("bit_rate")) or _read_int(payload.get("format", {}).get("bit_rate"))
     audio_bitrate = _read_int(audio_stream.get("bit_rate")) if audio_stream else 0
+    video_bitrate = _read_int(video_stream.get("bit_rate"))
+    if video_bitrate <= 0:
+        video_bitrate = max(0, _read_int(payload.get("format", {}).get("bit_rate")) - audio_bitrate)
     audio_sample_rate = _read_int(audio_stream.get("sample_rate")) if audio_stream else 0
     audio_channels = _read_int(audio_stream.get("channels")) if audio_stream else 0
     media_created_at = _read_media_created_at(payload, video_stream)
@@ -86,17 +89,44 @@ def probe_file(path: Path, tools: ToolPaths, logger: logging.Logger) -> VideoFil
         audio_sample_rate=audio_sample_rate,
         audio_channels=audio_channels,
         media_created_at=media_created_at,
+        video_time_base=str(video_stream.get("time_base") or ""),
     )
     logger.debug("Probed %s: %s", path, file)
     return file
 
 
 def probe_files(paths: list[Path], tools: ToolPaths, logger: logging.Logger) -> tuple[list[VideoFile], dict[Path, str]]:
-    results: list[VideoFile] = []
+    ordered_results: list[VideoFile | None] = [None] * len(paths)
     failures: dict[Path, str] = {}
-    for path in paths:
+
+    def worker(index: int, path: Path) -> tuple[int, VideoFile | None, str | None]:
         try:
-            file = probe_file(path, tools, logger)
+            return index, probe_file(path, tools, logger), None
+        except ProbeError as exc:
+            return index, None, str(exc)
+
+    max_workers = min(4, len(paths))
+    if max_workers > 1:
+        logger.info("Analyzing %d media files with %d parallel probes.", len(paths), max_workers)
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = [executor.submit(worker, index, path) for index, path in enumerate(paths)]
+            completed = (future.result() for future in as_completed(futures))
+            for index, file, error in completed:
+                if file is not None:
+                    ordered_results[index] = file
+                elif error is not None:
+                    failures[paths[index]] = error
+    else:
+        for index, path in enumerate(paths):
+            _, file, error = worker(index, path)
+            if file is not None:
+                ordered_results[index] = file
+            elif error is not None:
+                failures[path] = error
+
+    results: list[VideoFile] = []
+    for path, file in zip(paths, ordered_results):
+        if file is not None:
             results.append(file)
             logger.info(
                 "Media: %s | %s %dx%d display=%dx%d fps=%s pix=%s audio=%s/%sHz/%sch bitrate=%dk/%dk duration=%.2fs rotation=%d",
@@ -116,9 +146,8 @@ def probe_files(paths: list[Path], tools: ToolPaths, logger: logging.Logger) -> 
                 file.duration,
                 file.rotation,
             )
-        except ProbeError as exc:
-            failures[path] = str(exc)
-            logger.warning("Skipping unreadable file %s: %s", path, exc)
+        else:
+            logger.warning("Skipping unreadable file %s: %s", path, failures[path])
     return results, failures
 
 

@@ -48,6 +48,41 @@ class OptimalPlanningTests(unittest.TestCase):
         self.assertEqual(plan.copy_count, 3)
         self.assertEqual(plan.transcode_count, 0)
 
+    def test_large_batch_separates_remux_audio_and_video_actions(self) -> None:
+        files = [_video(f"ready_{index}.mp4", 1920, 1080, 4_000_000) for index in range(598)]
+        files.append(
+            _video("container_only.mkv", 1920, 1080, 4_000_000).__class__(
+                **{**_video("container_only.mkv", 1920, 1080, 4_000_000).__dict__, "container": "matroska"}
+            )
+        )
+        files.append(
+            _video("audio_only.mp4", 1920, 1080, 4_000_000).__class__(
+                **{**_video("audio_only.mp4", 1920, 1080, 4_000_000).__dict__, "audio_sample_rate": 44100}
+            )
+        )
+
+        plan = build_optimal_group_plan(files)
+
+        self.assertEqual(plan.copy_count, 598)
+        self.assertEqual(plan.remux_count, 1)
+        self.assertEqual(plan.audio_count, 1)
+        self.assertEqual(plan.transcode_count, 0)
+
+    def test_time_base_difference_uses_remux_instead_of_video_transcode(self) -> None:
+        ready = [_video(f"ready_{index}.mp4", 1920, 1080, 4_000_000) for index in range(2)]
+        different_time_base = _video("different_time_base.mp4", 1920, 1080, 4_000_000).__class__(
+            **{
+                **_video("different_time_base.mp4", 1920, 1080, 4_000_000).__dict__,
+                "video_time_base": "1/90000",
+            }
+        )
+
+        plan = build_optimal_group_plan([*ready, different_time_base])
+
+        self.assertEqual(plan.copy_count, 2)
+        self.assertEqual(plan.remux_count, 1)
+        self.assertEqual(plan.transcode_count, 0)
+
 
 def _video(name: str, width: int, height: int, bitrate: int, codec: str = "h264") -> VideoFile:
     return VideoFile(
@@ -71,6 +106,7 @@ def _video(name: str, width: int, height: int, bitrate: int, codec: str = "h264"
         audio_bitrate=128_000,
         audio_sample_rate=48_000,
         audio_channels=2,
+        video_time_base="1/15360",
     )
 
 

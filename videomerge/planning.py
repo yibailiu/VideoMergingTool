@@ -27,6 +27,14 @@ class OptimalGroupPlan:
         return sum(action == "copy" for action in self.actions.values())
 
     @property
+    def remux_count(self) -> int:
+        return sum(action == "remux" for action in self.actions.values())
+
+    @property
+    def audio_count(self) -> int:
+        return sum(action == "audio" for action in self.actions.values())
+
+    @property
     def transcode_count(self) -> int:
         return sum(action == "transcode" for action in self.actions.values())
 

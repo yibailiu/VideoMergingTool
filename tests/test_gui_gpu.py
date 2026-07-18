@@ -90,6 +90,20 @@ class GuiGpuTests(unittest.TestCase):
         self.assertEqual(payload["plan"]["transcode_count"], 1)
         self.assertEqual(actions["outlier.mp4"], "transcode")
 
+    def test_gui_extreme_status_uses_four_way_execution_plan(self) -> None:
+        ready = _video(Path("ready.mp4"))
+        remux = _video(Path("container.mkv")).__class__(
+            **{**_video(Path("container.mkv")).__dict__, "container": "matroska"}
+        )
+
+        payload = _build_gui_plan([ready, remux], [ready, remux], {"mode": "extreme"})
+        actions = {item["name"]: item["planned_action"] for item in payload["files"]}
+
+        self.assertEqual(payload["plan"]["copy_count"], 1)
+        self.assertEqual(payload["plan"]["remux_count"], 1)
+        self.assertEqual(payload["plan"]["transcode_count"], 0)
+        self.assertEqual(actions["container.mkv"], "remux")
+
     def test_windows_notification_script_uses_notify_icon_and_sound(self) -> None:
         script = _windows_notification_script("A&B's", "done", True)
 

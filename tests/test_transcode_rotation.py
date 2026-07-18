@@ -5,6 +5,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from videomerge.errors import CommandError
 from videomerge.models import Canvas, CodecPlan, Orientation, ToolPaths, VideoFile
 from videomerge.transcode import (
     AudioTarget,
@@ -14,6 +15,7 @@ from videomerge.transcode import (
     choose_passthrough_signature,
     choose_audio_action,
     choose_audio_target,
+    choose_preprocess_action,
     choose_video_action,
     preprocess_group,
     preprocess_file,
@@ -274,7 +276,7 @@ class TranscodeRotationTests(unittest.TestCase):
 
         self.assertEqual(choose_passthrough_signature(segments), choose_passthrough_signature([segments[0]]))
 
-    def test_preprocess_group_normalizes_non_dominant_ready_signature(self) -> None:
+    def test_preprocess_group_treats_equivalent_fps_fractions_as_same_signature(self) -> None:
         captured_commands = []
         first = _plain_video()
         second = _plain_video().__class__(**{**_plain_video().__dict__, "path": Path("second.mp4")})
@@ -304,10 +306,47 @@ class TranscodeRotationTests(unittest.TestCase):
 
         concat_commands = [command for command in captured_commands if "-f" in command and "concat" in command]
         transcode_commands = [command for command in captured_commands if "-vf" in command]
-        self.assertEqual(outputs[0:2], [first.path, second.path])
-        self.assertEqual(len(outputs), 3)
+        self.assertEqual(outputs, [first.path, second.path, third.path])
         self.assertEqual(len(concat_commands), 0)
-        self.assertEqual(len(transcode_commands), 1)
+        self.assertEqual(len(transcode_commands), 0)
+
+    def test_container_only_difference_uses_remux(self) -> None:
+        file = _plain_video().__class__(**{**_plain_video().__dict__, "path": Path("clip.mkv"), "container": "matroska"})
+        action = choose_preprocess_action(
+            file,
+            Canvas(1280, 720),
+            30.0,
+            CodecPlan("h264", "aac", "libx264", "aac"),
+            AudioTarget("aac", "aac", 48000, 2, "128k"),
+        )
+
+        self.assertEqual(action, "remux")
+
+    def test_audio_only_difference_does_not_request_video_transcode(self) -> None:
+        file = _plain_video().__class__(**{**_plain_video().__dict__, "audio_sample_rate": 44100})
+        action = choose_preprocess_action(
+            file,
+            Canvas(1280, 720),
+            30.0,
+            CodecPlan("h264", "aac", "libx264", "aac"),
+            AudioTarget("aac", "aac", 48000, 2, "128k"),
+        )
+
+        self.assertEqual(action, "audio")
+
+    def test_validation_rejects_truncated_preprocessed_output(self) -> None:
+        source = _plain_video()
+        truncated = source.__class__(**{**source.__dict__, "path": Path("out.mp4"), "duration": 8.0})
+
+        with patch("videomerge.transcode.probe_file", return_value=truncated):
+            with self.assertRaises(CommandError):
+                validate_preprocessed_output(
+                    Path("out.mp4"),
+                    source,
+                    Canvas(1280, 720),
+                    ToolPaths(ffmpeg=Path("ffmpeg"), ffprobe=Path("ffprobe")),
+                    logging.getLogger("test"),
+                )
 
 
 if __name__ == "__main__":
@@ -357,4 +396,5 @@ def _plain_video() -> VideoFile:
         audio_bitrate=128_000,
         audio_sample_rate=48000,
         audio_channels=2,
+        video_time_base="1/15360",
     )

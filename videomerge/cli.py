@@ -10,14 +10,7 @@ import typer
 
 from .env_check import default_tools_dir, resolve_tools
 from .errors import CommandError, DependencyError, VideoMergeError
-from .grouping import (
-    choose_canvas,
-    choose_dominant_source_profile,
-    choose_fps,
-    group_fast,
-    majority_codec_plan,
-    split_by_orientation,
-)
+from .grouping import group_fast, split_by_orientation
 from .gpu import GpuMode, apply_gpu_encoder, resolve_gpu_plan
 from .logger import setup_logging
 from .merge import concat_copy, warn_container_compatibility
@@ -346,6 +339,9 @@ def _run_fast(
             overwrite=overwrite,
             dry_run=dry_run,
             temp_root=temp_dir,
+            expected_duration=sum(file.duration for file in files),
+            expected_source_size=_source_total_size(files),
+            expected_file_count=len(files),
         )
         results.append(result)
         progress.advance(len(files), f"merged fast group {index}")
@@ -437,7 +433,21 @@ def _run_optimal(
         if name and len(groups) > 1:
             base_name = f"{name}_{orientation.value}"
         output_path = unique_output_path(output_dir, base_name, output_format, overwrite)
-        results.append(concat_copy(preprocessed, output_path, tools, logger, MergeMode.optimal, overwrite, dry_run, temp_dir))
+        results.append(
+            concat_copy(
+                preprocessed,
+                output_path,
+                tools,
+                logger,
+                MergeMode.optimal,
+                overwrite,
+                dry_run,
+                temp_dir,
+                expected_duration=sum(file.duration for file in files),
+                expected_source_size=_source_total_size(files),
+                expected_file_count=len(files),
+            )
+        )
         progress.advance(1, f"merged {orientation.value} output")
 
     _cleanup_temp_owners(temp_owners, logger)
@@ -467,20 +477,19 @@ def _run_extreme(
     progress: ProgressReporter,
 ) -> list[MergeResult]:
     logger.info("Mode: extreme. All files will be normalized into one output.")
-    codec_plan = _container_adjusted_plan(
-        majority_codec_plan(
-            media_files,
-            video_codec,
-            audio_codec,
-            default_video_codec=_default_transcode_video_codec(output_format),
-        ),
-        output_format,
-        logger,
+    plan = build_optimal_group_plan(
+        media_files,
+        output_format=output_format,
+        requested_video_codec=video_codec,
+        requested_audio_codec=audio_codec,
+        fps_policy=fps_policy,
+        resolution_policy="largest",
     )
+    codec_plan = plan.codec_plan
     gpu_plan = resolve_gpu_plan(tools, gpu, codec_plan.video_codec, logger)
     codec_plan = apply_gpu_encoder(codec_plan, gpu_plan)
-    canvas = choose_canvas(media_files)
-    fps = choose_fps(media_files, fps_policy)
+    canvas = plan.canvas
+    fps = plan.fps
     logger.info(
         "Extreme target: canvas=%s fps=%.3f video=%s audio=%s",
         canvas.label,
@@ -504,15 +513,37 @@ def _run_extreme(
         gpu_plan=gpu_plan,
         temp_root=temp_dir,
         progress_callback=lambda file: progress.advance(1, f"preprocessed {file.path.name}"),
-        target_video_bitrate=choose_dominant_source_profile(media_files).video_bitrate,
+        target_video_bitrate=plan.profile.video_bitrate,
         gpu_workers=gpu_workers,
     )
     base_name = name or auto_name(input_dir.name, "extreme", canvas.label)
     output_path = unique_output_path(output_dir, base_name, output_format, overwrite)
-    result = concat_copy(preprocessed, output_path, tools, logger, MergeMode.extreme, overwrite, dry_run, temp_dir)
+    result = concat_copy(
+        preprocessed,
+        output_path,
+        tools,
+        logger,
+        MergeMode.extreme,
+        overwrite,
+        dry_run,
+        temp_dir,
+        expected_duration=sum(file.duration for file in media_files),
+        expected_source_size=_source_total_size(media_files),
+        expected_file_count=len(media_files),
+    )
     progress.advance(1, "merged extreme output")
     _cleanup_temp_owners([owner] if owner else [], logger)
     return [result]
+
+
+def _source_total_size(files: list[VideoFile]) -> int:
+    total = 0
+    for file in files:
+        try:
+            total += file.path.stat().st_size
+        except OSError:
+            return 0
+    return total
 
 
 def _container_adjusted_plan(plan: CodecPlan, output_format: str, logger: logging.Logger) -> CodecPlan:

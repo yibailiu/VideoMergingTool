@@ -1,23 +1,18 @@
 from __future__ import annotations
 
+import concurrent.futures
 import logging
 import tempfile
-import concurrent.futures
 from collections import Counter
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
 from .errors import CommandError, ProbeError
 from .gpu import GpuPlan, gpu_encoder_quality_args
-from .merge import concat_copy
-from .models import MergeMode
 from .models import Canvas, CodecPlan, ToolPaths, VideoFile
 from .probe import probe_file
 from .utils import run_command
-
-
-
 @dataclass(frozen=True)
 class AudioTarget:
     codec: str
@@ -30,7 +25,11 @@ class AudioTarget:
 @dataclass(frozen=True)
 class PreprocessSegment:
     files: list[VideoFile]
-    copy_compatible: bool
+    action: str
+
+    @property
+    def copy_compatible(self) -> bool:
+        return self.action == "copy"
 
 
 def preprocess_group(
@@ -69,7 +68,10 @@ def preprocess_group(
 
     segments = build_preprocess_segments(files, canvas, fps, codec_plan, audio_target)
     passthrough_signature = choose_passthrough_signature(segments)
+    target_video_timescale = _choose_target_video_timescale(files, passthrough_signature)
     logger.info("Preprocess segmentation: %d segment(s) for %d file(s).", len(segments), len(files))
+    if target_video_timescale > 0:
+        logger.info("Preprocess target video timescale: %d.", target_video_timescale)
     if passthrough_signature:
         passthrough_count = sum(
             len(segment.files)
@@ -80,23 +82,17 @@ def preprocess_group(
             "Preprocess passthrough: %d ready file(s) match the dominant concat signature and will skip normalization.",
             passthrough_count,
         )
-    else:
-        passthrough_count = 0
-    transcode_files = len(files) - passthrough_count
-    transcode_jobs = sum(
-        1
+    action_counts = Counter(
+        _effective_segment_action(segment, passthrough_signature)
         for segment in segments
-        if not (
-            segment.copy_compatible
-            and passthrough_signature is not None
-            and _concat_signature(segment.files[0]) == passthrough_signature
-        )
+        for _ in segment.files
     )
     logger.info(
-        "Preprocess plan: copy_files=%d transcode_files=%d transcode_jobs=%d gpu_workers=%d.",
-        passthrough_count,
-        transcode_files,
-        transcode_jobs,
+        "Preprocess plan: copy=%d remux=%d audio=%d transcode=%d gpu_workers=%d.",
+        action_counts["copy"],
+        action_counts["remux"],
+        action_counts["audio"],
+        action_counts["transcode"],
         min(max(1, gpu_workers), 3),
     )
     _log_size_estimate(
@@ -115,9 +111,13 @@ def preprocess_group(
         if keep_temp
         else tempfile.TemporaryDirectory(prefix="videomerge_preprocess_", dir=temp_root)
     )
-    temp_dir = Path(temp_owner.name) if temp_owner else Path(tempfile.mkdtemp(prefix="videomerge_preprocess_", dir=temp_root))
+    temp_dir = (
+        Path(temp_owner.name)
+        if temp_owner
+        else Path(tempfile.mkdtemp(prefix="videomerge_preprocess_", dir=temp_root))
+    )
     logger.info("Preprocessing temp directory: %s", temp_dir)
-    
+
     # 预分配数组以确保并发结果按照原始分段顺序插入
     outputs: list[list[Path]] = [[] for _ in segments]
 
@@ -134,20 +134,16 @@ def preprocess_group(
                 len(segment.files),
             )
             processed_paths = [file.path for file in segment.files]
-        elif segment.copy_compatible:
-            processed_path = preprocess_copy_segment(
-                segment=segment, output_path=output_path, temp_dir=temp_dir, index=idx + 1,
-                canvas=canvas, fps=fps, codec_plan=codec_plan, audio_target=audio_target,
-                tools=tools, logger=logger, pad_color=pad_color, crf=crf, preset=preset,
-                dry_run=dry_run, gpu_plan=gpu_plan, target_video_bitrate=target_video_bitrate
-            )
-            processed_paths = [processed_path]
         else:
+            action = _effective_segment_action(segment, passthrough_signature)
             processed_path = preprocess_file(
                 file=segment.files[0], output_path=output_path, canvas=canvas, fps=fps,
                 codec_plan=codec_plan, audio_target=audio_target, tools=tools, logger=logger,
                 pad_color=pad_color, crf=crf, preset=preset, dry_run=dry_run, gpu_plan=gpu_plan,
-                force_video_transcode=True, target_video_bitrate=target_video_bitrate
+                force_video_transcode=action == "transcode" and segment.action == "copy",
+                force_remux=action == "remux" and segment.action == "copy",
+                target_video_bitrate=target_video_bitrate,
+                target_video_timescale=target_video_timescale,
             )
             processed_paths = [processed_path]
         return idx, processed_paths
@@ -181,65 +177,6 @@ def preprocess_group(
     return flattened_outputs, temp_owner
 
 
-def preprocess_copy_segment(
-    segment: PreprocessSegment,
-    output_path: Path,
-    temp_dir: Path,
-    index: int,
-    canvas: Canvas,
-    fps: float,
-    codec_plan: CodecPlan,
-    audio_target: AudioTarget,
-    tools: ToolPaths,
-    logger: logging.Logger,
-    pad_color: str,
-    crf: int,
-    preset: str,
-    dry_run: bool,
-    gpu_plan: GpuPlan | None = None,
-    target_video_bitrate: int = 0,
-) -> Path:
-    first = segment.files[0]
-    source_path = first.path
-    if len(segment.files) > 1:
-        source_path = temp_dir / f"{index:04d}_copy_segment.mp4"
-        logger.info(
-            "Preprocess decision: stream-copy %d ready file(s) into segment before one normalization pass.",
-            len(segment.files),
-        )
-        concat_copy(
-            files=[file.path for file in segment.files],
-            output_path=source_path,
-            tools=tools,
-            logger=logger,
-            mode=MergeMode.optimal,
-            overwrite=True,
-            dry_run=dry_run,
-            temp_root=temp_dir,
-        )
-    else:
-        logger.info("Preprocess decision: normalize single ready file as its own safe segment: %s", first.path.name)
-
-    segment_file = replace(first, path=source_path, duration=sum(file.duration for file in segment.files))
-    return preprocess_file(
-        file=segment_file,
-        output_path=output_path,
-        canvas=canvas,
-        fps=fps,
-        codec_plan=codec_plan,
-        audio_target=audio_target,
-        tools=tools,
-        logger=logger,
-        pad_color=pad_color,
-        crf=crf,
-        preset=preset,
-        dry_run=dry_run,
-        gpu_plan=gpu_plan,
-        force_video_transcode=True,
-        target_video_bitrate=target_video_bitrate,
-    )
-
-
 def preprocess_file(
     file: VideoFile,
     output_path: Path,
@@ -255,14 +192,22 @@ def preprocess_file(
     gpu_plan: GpuPlan | None = None,
     audio_target: AudioTarget | None = None,
     force_video_transcode: bool = False,
+    force_remux: bool = False,
     target_video_bitrate: int = 0,
+    target_video_timescale: int = 0,
 ) -> Path:
     audio_target = audio_target or choose_audio_target([file], codec_plan)
     video_action = choose_video_action(file, canvas, fps, codec_plan)
     if force_video_transcode:
         video_action = "transcode"
     audio_action = choose_audio_action(file, audio_target)
-    if not force_video_transcode and video_action == "copy" and audio_action == "copy" and _is_concat_safe_source(file):
+    if (
+        not force_video_transcode
+        and not force_remux
+        and video_action == "copy"
+        and audio_action == "copy"
+        and _is_concat_safe_source(file)
+    ):
         logger.info(
             "Preprocess decision: copy original %s | video/audio already match target.",
             file.path.name,
@@ -271,7 +216,19 @@ def preprocess_file(
 
     if not force_video_transcode and video_action == "copy" and audio_action == "copy":
         logger.info("Preprocess decision: remux %s -> %s | codecs already match.", file.path.name, output_path.name)
-        remux_copy(file, output_path, tools, logger, dry_run)
+        remux_copy(file, output_path, tools, logger, dry_run, target_video_timescale)
+        if not dry_run:
+            validate_preprocessed_output(
+                output_path,
+                file,
+                canvas,
+                tools,
+                logger,
+                fps,
+                codec_plan,
+                audio_target,
+                target_video_timescale,
+            )
         return output_path
 
     video_filter = build_video_filter(file.rotation, canvas, fps, pad_color)
@@ -318,6 +275,7 @@ def preprocess_file(
         )
         logger.info("Adding silent audio: %s", file.path.name)
 
+    effective_target_video_bitrate = _bounded_target_video_bitrate(file, target_video_bitrate)
     if video_action == "copy":
         args.extend(["-map_metadata", "-1", "-metadata:s:v:0", "rotate=0", "-c:v", "copy"])
     else:
@@ -338,7 +296,7 @@ def preprocess_file(
                     canvas.width,
                     canvas.height,
                     fps,
-                    target_video_bitrate,
+                    effective_target_video_bitrate,
                 ),
                 "-pix_fmt",
                 "yuv420p",
@@ -348,8 +306,25 @@ def preprocess_file(
     if audio_action == "copy":
         args.extend(["-c:a", "copy"])
     else:
-        args.extend(["-c:a", audio_target.encoder, "-b:a", audio_target.bitrate, "-ar", str(audio_target.sample_rate), "-ac", str(audio_target.channels)])
-    args.extend(["-shortest", output_path])
+        args.extend(
+            [
+                "-c:a",
+                audio_target.encoder,
+                "-b:a",
+                audio_target.bitrate,
+                "-ar",
+                str(audio_target.sample_rate),
+                "-ac",
+                str(audio_target.channels),
+            ]
+        )
+        if file.has_audio:
+            args.extend(["-af", "apad"])
+    if not file.has_audio or audio_action != "copy":
+        args.append("-shortest")
+    if target_video_timescale > 0:
+        args.extend(["-video_track_timescale", str(target_video_timescale)])
+    args.append(output_path)
     logger.info(
         "Preprocess decision: %s %s -> %s | source=%dx%d display=%dx%d rotation=%d canvas=%s fps=%.3f v=%s a=%s",
         "audio-only" if video_action == "copy" and audio_action != "copy" else "transcode",
@@ -367,11 +342,28 @@ def preprocess_file(
     )
     run_command(args, logger, dry_run=dry_run)
     if not dry_run:
-        validate_preprocessed_output(output_path, file, canvas, tools, logger)
+        validate_preprocessed_output(
+            output_path,
+            file,
+            canvas,
+            tools,
+            logger,
+            fps,
+            codec_plan,
+            audio_target,
+            target_video_timescale,
+        )
     return output_path
 
 
-def remux_copy(file: VideoFile, output_path: Path, tools: ToolPaths, logger: logging.Logger, dry_run: bool) -> None:
+def remux_copy(
+    file: VideoFile,
+    output_path: Path,
+    tools: ToolPaths,
+    logger: logging.Logger,
+    dry_run: bool,
+    target_video_timescale: int = 0,
+) -> None:
     args: list[str | Path] = [
         tools.ffmpeg,
         "-y",
@@ -386,7 +378,10 @@ def remux_copy(file: VideoFile, output_path: Path, tools: ToolPaths, logger: log
     ]
     if file.has_audio:
         args.extend(["-map", "0:a:0"])
-    args.extend(["-map_metadata", "-1", "-metadata:s:v:0", "rotate=0", "-c", "copy", output_path])
+    args.extend(["-map_metadata", "-1", "-metadata:s:v:0", "rotate=0", "-c", "copy"])
+    if target_video_timescale > 0:
+        args.extend(["-video_track_timescale", str(target_video_timescale)])
+    args.append(output_path)
     run_command(args, logger, dry_run=dry_run)
 
 
@@ -436,18 +431,14 @@ def build_preprocess_segments(
     def flush_current() -> None:
         nonlocal current
         if current:
-            segments.append(PreprocessSegment(files=current, copy_compatible=True))
+            segments.append(PreprocessSegment(files=current, action="copy"))
             current = []
 
     for file in files:
-        copy_ready = (
-            _is_concat_safe_source(file)
-            and choose_video_action(file, canvas, fps, codec_plan) == "copy"
-            and choose_audio_action(file, audio_target) == "copy"
-        )
-        if not copy_ready:
+        action = choose_preprocess_action(file, canvas, fps, codec_plan, audio_target)
+        if action != "copy":
             flush_current()
-            segments.append(PreprocessSegment(files=[file], copy_compatible=False))
+            segments.append(PreprocessSegment(files=[file], action=action))
             continue
         if current and _concat_signature(file) != _concat_signature(current[0]):
             flush_current()
@@ -468,6 +459,33 @@ def choose_passthrough_signature(segments: list[PreprocessSegment]) -> tuple[obj
     return Counter(ready_signatures).most_common(1)[0][0]
 
 
+def choose_preprocess_action(
+    file: VideoFile,
+    canvas: Canvas,
+    fps: float,
+    codec_plan: CodecPlan,
+    audio_target: AudioTarget,
+) -> str:
+    if choose_video_action(file, canvas, fps, codec_plan) != "copy":
+        return "transcode"
+    if choose_audio_action(file, audio_target) != "copy":
+        return "audio"
+    if not _is_concat_safe_source(file):
+        return "remux"
+    return "copy"
+
+
+def _effective_segment_action(
+    segment: PreprocessSegment,
+    passthrough_signature: tuple[object, ...] | None,
+) -> str:
+    if segment.action != "copy":
+        return segment.action
+    if passthrough_signature is not None and _concat_signature(segment.files[0]) == passthrough_signature:
+        return "copy"
+    return "remux"
+
+
 def plan_preprocess_actions(
     files: list[VideoFile],
     canvas: Canvas,
@@ -480,13 +498,9 @@ def plan_preprocess_actions(
     passthrough_signature = choose_passthrough_signature(segments)
     actions: dict[Path, str] = {}
     for segment in segments:
-        passthrough = (
-            segment.copy_compatible
-            and passthrough_signature is not None
-            and _concat_signature(segment.files[0]) == passthrough_signature
-        )
+        action = _effective_segment_action(segment, passthrough_signature)
         for file in segment.files:
-            actions[file.path] = "copy" if passthrough else "transcode"
+            actions[file.path] = action
     return actions
 
 
@@ -496,12 +510,36 @@ def _concat_signature(file: VideoFile) -> tuple[object, ...]:
         _normalize_audio_codec(file.audio_codec or ""),
         file.display_width,
         file.display_height,
-        file.frame_rate,
+        round(file.frame_rate_float, 3),
         file.pixel_format,
         file.rotation,
         file.audio_sample_rate,
         file.audio_channels,
+        file.video_time_base,
     )
+
+
+def _choose_target_video_timescale(
+    files: list[VideoFile],
+    passthrough_signature: tuple[object, ...] | None,
+) -> int:
+    if passthrough_signature:
+        timescale = _video_timescale(str(passthrough_signature[-1]))
+        if timescale > 0:
+            return timescale
+    return 90_000 if files else 0
+
+
+def _video_timescale(time_base: str) -> int:
+    try:
+        numerator_text, denominator_text = time_base.split("/", 1)
+        numerator = int(numerator_text)
+        denominator = int(denominator_text)
+    except (AttributeError, ValueError, ZeroDivisionError):
+        return 0
+    if numerator <= 0 or denominator <= 0:
+        return 0
+    return round(denominator / numerator)
 
 
 def choose_audio_action(file: VideoFile, audio_target: AudioTarget) -> str:
@@ -509,11 +547,19 @@ def choose_audio_action(file: VideoFile, audio_target: AudioTarget) -> str:
         return "encode"
     if _normalize_audio_codec(file.audio_codec or "") != _normalize_audio_codec(audio_target.codec):
         return "encode"
-    if file.audio_sample_rate and file.audio_sample_rate != audio_target.sample_rate:
+    if file.audio_sample_rate != audio_target.sample_rate:
         return "encode"
-    if file.audio_channels and file.audio_channels != audio_target.channels:
+    if file.audio_channels != audio_target.channels:
         return "encode"
     return "copy"
+
+
+def _bounded_target_video_bitrate(file: VideoFile, target_video_bitrate: int) -> int:
+    if target_video_bitrate <= 0:
+        return max(file.video_bitrate, 0)
+    if file.video_bitrate <= 0:
+        return target_video_bitrate
+    return min(file.video_bitrate, target_video_bitrate)
 
 
 def choose_audio_target(files: list[VideoFile], codec_plan: CodecPlan) -> AudioTarget:
@@ -603,16 +649,16 @@ def _log_size_estimate(
     audio_bitrate = int(audio_target.bitrate.removesuffix("k")) * 1000
     estimated_total = 0
     for segment in segments:
-        passthrough = (
-            segment.copy_compatible
-            and passthrough_signature is not None
-            and _concat_signature(segment.files[0]) == passthrough_signature
-        )
+        action = _effective_segment_action(segment, passthrough_signature)
         for file in segment.files:
-            if passthrough:
+            if action in {"copy", "remux"}:
                 estimated_total += source_sizes[file.path]
+            elif action == "audio":
+                video_bitrate = file.video_bitrate or target_video_bitrate
+                estimated_total += int(max(file.duration, 0.1) * (video_bitrate + audio_bitrate) / 8)
             else:
-                estimated_total += int(max(file.duration, 0.1) * (target_video_bitrate + audio_bitrate) / 8)
+                video_bitrate = _bounded_target_video_bitrate(file, target_video_bitrate)
+                estimated_total += int(max(file.duration, 0.1) * (video_bitrate + audio_bitrate) / 8)
 
     ratio = estimated_total / source_total
     logger.info(
@@ -654,6 +700,10 @@ def validate_preprocessed_output(
     canvas: Canvas,
     tools: ToolPaths,
     logger: logging.Logger,
+    expected_fps: float | None = None,
+    codec_plan: CodecPlan | None = None,
+    audio_target: AudioTarget | None = None,
+    expected_video_timescale: int = 0,
 ) -> None:
     try:
         media = probe_file(output_path, tools, logger)
@@ -670,10 +720,55 @@ def validate_preprocessed_output(
             f"Preprocessed file display size mismatch: {source_file.path.name} -> {output_path} "
             f"display={media.display_width}x{media.display_height}, expected={canvas.label}"
         )
+    if source_file.duration > 0:
+        tolerance = max(0.25, min(2.0, source_file.duration * 0.005))
+        if media.duration + tolerance < source_file.duration:
+            raise CommandError(
+                f"Preprocessed file is shorter than its source: {source_file.path.name} -> {output_path} "
+                f"duration={media.duration:.3f}s, expected at least {source_file.duration - tolerance:.3f}s"
+            )
+    if expected_fps is not None and not _fps_matches(media.frame_rate_float, expected_fps):
+        raise CommandError(
+            f"Preprocessed file frame rate mismatch: {source_file.path.name} -> {output_path} "
+            f"fps={media.frame_rate_float:.3f}, expected={expected_fps:.3f}"
+        )
+    if (
+        codec_plan is not None
+        and _normalize_video_codec(media.video_codec) != _normalize_video_codec(codec_plan.video_codec)
+    ):
+        raise CommandError(
+            f"Preprocessed file video codec mismatch: {source_file.path.name} -> {output_path} "
+            f"codec={media.video_codec}, expected={codec_plan.video_codec}"
+        )
+    if (
+        expected_video_timescale > 0
+        and _video_timescale(media.video_time_base) != expected_video_timescale
+    ):
+        raise CommandError(
+            f"Preprocessed file video timescale mismatch: {source_file.path.name} -> {output_path} "
+            f"time_base={media.video_time_base}, expected=1/{expected_video_timescale}"
+        )
+    if audio_target is not None:
+        if not media.has_audio:
+            raise CommandError(
+                f"Preprocessed file has no audio stream: {source_file.path.name} -> {output_path}"
+            )
+        if _normalize_audio_codec(media.audio_codec or "") != _normalize_audio_codec(audio_target.codec):
+            raise CommandError(
+                f"Preprocessed file audio codec mismatch: {source_file.path.name} -> {output_path} "
+                f"codec={media.audio_codec}, expected={audio_target.codec}"
+            )
+        if media.audio_sample_rate != audio_target.sample_rate or media.audio_channels != audio_target.channels:
+            raise CommandError(
+                f"Preprocessed file audio shape mismatch: {source_file.path.name} -> {output_path} "
+                f"audio={media.audio_sample_rate}Hz/{media.audio_channels}ch, "
+                f"expected={audio_target.sample_rate}Hz/{audio_target.channels}ch"
+            )
 
     logger.info(
-        "Validated preprocessed output: %s | display=%dx%d rotation=%d",
+        "Validated preprocessed output: %s | duration=%.3fs display=%dx%d rotation=%d",
         output_path.name,
+        media.duration,
         media.display_width,
         media.display_height,
         media.rotation,

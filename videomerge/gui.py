@@ -674,8 +674,8 @@ HTML = r"""<!doctype html>
         fastPlan: "Tool will stream-copy compatible groups only. Incompatible files will be skipped.",
         optimalPlan: "Tool will create up to {count} output file(s), separated by landscape and portrait display orientation.",
         extremePlan: "Tool will normalize all files to one display canvas and produce one output file.",
-        groupLabel: "{orientation} group ({size})", ready: "Ready", needsTranscode: "Needs Transcode", skipped: "Skipped", excluded: "Not Selected", summary: "{files} files detected - {groups} groups",
-        planCounts: "{copy} stream copy, {transcode} transcode, {skipped} skipped.",
+        groupLabel: "{orientation} group ({size})", ready: "Ready", needsRemux: "Remux Only", needsAudio: "Audio Only", needsTranscode: "Needs Transcode", skipped: "Skipped", excluded: "Not Selected", summary: "{files} files detected - {groups} groups",
+        planCounts: "{copy} copy, {remux} remux, {audio} audio only, {transcode} video transcode, {skipped} skipped.",
         folderCancelled: "Folder selection was cancelled or is unavailable on this system.", scanning: "Scanning {path}", filesAnalyzed: "{count} files analyzed.",
         startingMerge: "Starting {mode} merge", stoppingMerge: "Stopping current merge task...", selectBegin: "Select a source folder to begin.",
         mergeCompletedTitle: "Merge Completed", mergeCompletedBody: "Your video merge task has finished.", mergeFailedTitle: "Merge Failed", mergeFailedBody: "The merge task ended with an error. Check the process console for details.",
@@ -727,8 +727,8 @@ HTML = r"""<!doctype html>
         fastPlan: "工具将仅对兼容分组合并，跳过不兼容文件。",
         optimalPlan: "工具将按横竖屏生成最多 {count} 个输出文件。",
         extremePlan: "工具将把所有文件统一到一个画布并生成一个输出文件。",
-        groupLabel: "{orientation} 分组（{size}）", ready: "就绪", needsTranscode: "需要转码", skipped: "将跳过", excluded: "未选中", summary: "检测到 {files} 个文件 - {groups} 个分组",
-        planCounts: "流复制 {copy} 个，转码 {transcode} 个，跳过 {skipped} 个。",
+        groupLabel: "{orientation} 分组（{size}）", ready: "就绪", needsRemux: "仅重封装", needsAudio: "仅音频转码", needsTranscode: "需要视频转码", skipped: "将跳过", excluded: "未选中", summary: "检测到 {files} 个文件 - {groups} 个分组",
+        planCounts: "直通 {copy} 个，重封装 {remux} 个，仅音频 {audio} 个，视频转码 {transcode} 个，跳过 {skipped} 个。",
         folderCancelled: "文件夹选择已取消，或当前系统不可用。", scanning: "正在扫描 {path}", filesAnalyzed: "已分析 {count} 个文件。",
         startingMerge: "开始 {mode} 合并", stoppingMerge: "正在停止当前合并任务...", selectBegin: "请选择源文件夹开始。",
         mergeCompletedTitle: "合并完成", mergeCompletedBody: "视频合并任务已完成。", mergeFailedTitle: "合并失败", mergeFailedBody: "合并任务发生错误，请查看处理控制台。", mergeStoppedTitle: "合并已停止", mergeStoppedBody: "用户已手动停止当前合并任务。",
@@ -970,6 +970,8 @@ HTML = r"""<!doctype html>
       if (state.plan) {
         $("planText").textContent = t("planCounts", {
           copy: state.plan.copy_count || 0,
+          remux: state.plan.remux_count || 0,
+          audio: state.plan.audio_count || 0,
           transcode: state.plan.transcode_count || 0,
           skipped: state.plan.skipped_count || 0
         });
@@ -997,8 +999,8 @@ HTML = r"""<!doctype html>
         rows.insertAdjacentHTML("beforeend", `<tr class="group-row"><td colspan="9">${escapeHtml(t("groupLabel", { orientation, size: `${w}x${h}` }))}</td></tr>`);
         group.forEach(file => {
           const action = file.planned_action || "unknown";
-          const cls = action === "copy" ? "status-ok" : "status-warn";
-          const statusKeys = { copy: "ready", transcode: "needsTranscode", skipped: "skipped", excluded: "excluded" };
+          const cls = action === "copy" || action === "remux" ? "status-ok" : "status-warn";
+          const statusKeys = { copy: "ready", remux: "needsRemux", audio: "needsAudio", transcode: "needsTranscode", skipped: "skipped", excluded: "excluded" };
           const status = t(statusKeys[action] || "needsTranscode");
           const checked = state.selectedPaths.has(file.path) ? "checked" : "";
           rows.insertAdjacentHTML("beforeend", `
@@ -1695,8 +1697,29 @@ def _build_gui_plan(
             for file in members:
                 actions[file.path] = action
     elif mode == MergeMode.extreme.value:
-        for file in selected_files:
-            actions[file.path] = "transcode"
+        if selected_files:
+            plan = build_optimal_group_plan(
+                selected_files,
+                output_format=str(payload.get("output_format") or "mp4"),
+                requested_video_codec=str(payload.get("video_codec") or "") or None,
+                requested_audio_codec=str(payload.get("audio_codec") or "") or None,
+                fps_policy=str(payload.get("fps_policy") or "majority"),
+                resolution_policy="largest",
+            )
+            actions.update(plan.actions)
+            targets.append(
+                {
+                    "orientation": "all",
+                    "canvas": plan.canvas.label,
+                    "fps": round(plan.fps, 3),
+                    "video_codec": plan.codec_plan.video_codec,
+                    "audio_codec": plan.codec_plan.audio_codec,
+                    "copy_count": plan.copy_count,
+                    "remux_count": plan.remux_count,
+                    "audio_count": plan.audio_count,
+                    "transcode_count": plan.transcode_count,
+                }
+            )
     else:
         groups = split_by_orientation(selected_files)
         for orientation in (Orientation.landscape, Orientation.portrait):
@@ -1720,6 +1743,8 @@ def _build_gui_plan(
                     "video_codec": plan.codec_plan.video_codec,
                     "audio_codec": plan.codec_plan.audio_codec,
                     "copy_count": plan.copy_count,
+                    "remux_count": plan.remux_count,
+                    "audio_count": plan.audio_count,
                     "transcode_count": plan.transcode_count,
                 }
             )
@@ -1730,6 +1755,8 @@ def _build_gui_plan(
         "plan": {
             "mode": mode,
             "copy_count": counts["copy"],
+            "remux_count": counts["remux"],
+            "audio_count": counts["audio"],
             "transcode_count": counts["transcode"],
             "skipped_count": counts["skipped"],
             "selected_count": len(selected_files),

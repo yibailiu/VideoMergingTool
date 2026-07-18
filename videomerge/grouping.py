@@ -187,11 +187,12 @@ def _source_profile_key(file: VideoFile) -> tuple[object, ...]:
         _normalize_audio_codec(file.audio_codec),
         file.display_width,
         file.display_height,
-        file.frame_rate,
+        round(file.frame_rate_float, 3),
         file.pixel_format,
         file.rotation,
         file.audio_sample_rate,
         file.audio_channels,
+        file.video_time_base,
     )
 
 

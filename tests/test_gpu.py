@@ -72,6 +72,13 @@ class GpuTests(unittest.TestCase):
         self.assertEqual(args[args.index("-b:v") + 1], "4000k")
         self.assertEqual(args[args.index("-maxrate") + 1], "5000k")
 
+    def test_videotoolbox_high_quality_does_not_exceed_source_bitrate(self) -> None:
+        args = gpu_encoder_quality_args(
+            "h264_videotoolbox", 20, "medium", 1920, 1080, 30, source_bitrate=2_000_000
+        )
+
+        self.assertEqual(args[args.index("-b:v") + 1], "2000k")
+
     def test_videotoolbox_4k_fallback_no_longer_uses_60_mbps(self) -> None:
         args = gpu_encoder_quality_args("h264_videotoolbox", 23, "medium", 3840, 2160, 30)
 

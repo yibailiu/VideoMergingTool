@@ -208,10 +208,11 @@ def _videotoolbox_bitrate(
     safe_width = width or 1920
     safe_height = height or 1080
     safe_fps = fps or 30.0
-    quality_factor = max(0.5, min(2.0, 2 ** ((23 - crf) / 6)))
     if source_bitrate and source_bitrate > 0:
         baseline_kbps = source_bitrate / 1000
+        quality_factor = 1.0
     else:
+        quality_factor = max(0.5, min(2.0, 2 ** ((23 - crf) / 6)))
         bits_per_pixel = 0.065 if hevc else 0.1
         baseline_kbps = (safe_width * safe_height * safe_fps * bits_per_pixel) / 1000
     bitrate = int(baseline_kbps * quality_factor)
