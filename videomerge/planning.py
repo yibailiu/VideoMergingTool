@@ -73,6 +73,23 @@ def build_optimal_group_plan(
     )
 
 
+def build_extreme_group_plan(
+    files: list[VideoFile],
+    output_format: str = "mp4",
+    requested_video_codec: str | None = None,
+    requested_audio_codec: str | None = None,
+    fps_policy: str = "majority",
+) -> OptimalGroupPlan:
+    return build_optimal_group_plan(
+        files,
+        output_format=output_format,
+        requested_video_codec=requested_video_codec,
+        requested_audio_codec=requested_audio_codec,
+        fps_policy=fps_policy,
+        resolution_policy="dominant",
+    )
+
+
 def _default_video_codec(output_format: str) -> str:
     return "vp9" if output_format == "webm" else "h264"
 

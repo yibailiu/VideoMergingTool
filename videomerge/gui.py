@@ -26,7 +26,7 @@ from .env_check import default_tools_dir, resolve_tools
 from .grouping import group_fast, split_by_orientation
 from .gpu import detect_ffmpeg_encoders
 from .models import MergeMode, Orientation, VideoFile
-from .planning import build_optimal_group_plan
+from .planning import build_extreme_group_plan, build_optimal_group_plan
 from .probe import probe_files
 from .scanner import scan_video_files, sort_probed_files
 from .utils import subprocess_window_kwargs
@@ -1698,13 +1698,12 @@ def _build_gui_plan(
                 actions[file.path] = action
     elif mode == MergeMode.extreme.value:
         if selected_files:
-            plan = build_optimal_group_plan(
+            plan = build_extreme_group_plan(
                 selected_files,
                 output_format=str(payload.get("output_format") or "mp4"),
                 requested_video_codec=str(payload.get("video_codec") or "") or None,
                 requested_audio_codec=str(payload.get("audio_codec") or "") or None,
                 fps_policy=str(payload.get("fps_policy") or "majority"),
-                resolution_policy="largest",
             )
             actions.update(plan.actions)
             targets.append(

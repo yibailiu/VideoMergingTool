@@ -16,7 +16,7 @@ from .logger import setup_logging
 from .merge import concat_copy, warn_container_compatibility
 from .models import CodecPlan, MergeMode, MergeResult, Orientation, VideoFile
 from .naming import SUPPORTED_OUTPUT_FORMATS, auto_name, prepare_output_dir, unique_output_path
-from .planning import build_optimal_group_plan
+from .planning import build_extreme_group_plan, build_optimal_group_plan
 from .probe import probe_files
 from .scanner import SORT_OPTIONS, VIDEO_EXTENSIONS, scan_video_files, sort_probed_files
 from .transcode import preprocess_group
@@ -477,13 +477,12 @@ def _run_extreme(
     progress: ProgressReporter,
 ) -> list[MergeResult]:
     logger.info("Mode: extreme. All files will be normalized into one output.")
-    plan = build_optimal_group_plan(
+    plan = build_extreme_group_plan(
         media_files,
         output_format=output_format,
         requested_video_codec=video_codec,
         requested_audio_codec=audio_codec,
         fps_policy=fps_policy,
-        resolution_policy="largest",
     )
     codec_plan = plan.codec_plan
     gpu_plan = resolve_gpu_plan(tools, gpu, codec_plan.video_codec, logger)

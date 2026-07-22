@@ -3,7 +3,7 @@ from __future__ import annotations
 import unittest
 from pathlib import Path
 
-from videomerge.planning import build_optimal_group_plan
+from videomerge.planning import build_extreme_group_plan, build_optimal_group_plan
 from videomerge.models import Orientation, VideoFile
 
 
@@ -34,6 +34,21 @@ class OptimalPlanningTests(unittest.TestCase):
 
         self.assertEqual(plan.canvas.label, "3840x2160")
         self.assertEqual(plan.copy_count, 1)
+        self.assertEqual(plan.transcode_count, 5)
+
+    def test_extreme_mode_uses_dominant_canvas_for_595_to_5_batch(self) -> None:
+        files = [
+            _video(f"1080_{index}.mp4", 1920, 1080, 4_000_000)
+            for index in range(595)
+        ] + [
+            _video(f"4k_{index}.mp4", 3840, 2160, 15_000_000)
+            for index in range(5)
+        ]
+
+        plan = build_extreme_group_plan(files)
+
+        self.assertEqual(plan.canvas.label, "1920x1080")
+        self.assertEqual(plan.copy_count, 595)
         self.assertEqual(plan.transcode_count, 5)
 
     def test_hevc_dominant_profile_preserves_hevc_target(self) -> None:

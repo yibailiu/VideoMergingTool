@@ -86,6 +86,7 @@ def validate_merged_output(
     if expected_duration > 0:
         tolerance = max(1.0, expected_duration * 0.001, max(expected_file_count, 1) * 0.03)
         if media.duration + tolerance < expected_duration:
+            output_path.unlink(missing_ok=True)
             raise CommandError(
                 f"Merged output appears incomplete: duration={media.duration:.3f}s, "
                 f"expected at least {expected_duration - tolerance:.3f}s ({expected_file_count} source files)"
@@ -94,6 +95,7 @@ def validate_merged_output(
     if expected_source_size > 0:
         allowed_size = int(expected_source_size * 1.15) + 16 * 1024 * 1024
         if output_size > allowed_size:
+            output_path.unlink(missing_ok=True)
             raise CommandError(
                 f"Merged output exceeds the source-size safety limit: output={output_size} bytes, "
                 f"sources={expected_source_size} bytes, limit={allowed_size} bytes"

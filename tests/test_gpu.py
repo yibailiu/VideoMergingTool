@@ -28,6 +28,17 @@ class GpuTests(unittest.TestCase):
         self.assertNotIn("-crf", args)
         self.assertIn("p7", args)
 
+    def test_windows_gpu_encoders_apply_source_bitrate_limit(self) -> None:
+        for encoder in ("h264_nvenc", "h264_qsv", "h264_amf"):
+            with self.subTest(encoder=encoder):
+                args = gpu_encoder_quality_args(
+                    encoder, 20, "medium", 1920, 1080, 30, source_bitrate=4_000_000
+                )
+
+                self.assertEqual(args[args.index("-b:v") + 1], "4000k")
+                self.assertEqual(args[args.index("-maxrate") + 1], "4000k")
+                self.assertEqual(args[args.index("-bufsize") + 1], "8000k")
+
     def test_cpu_h264_quality_args_use_crf(self) -> None:
         args = gpu_encoder_quality_args("libx264", 18, "slow")
 
@@ -70,7 +81,7 @@ class GpuTests(unittest.TestCase):
         )
 
         self.assertEqual(args[args.index("-b:v") + 1], "4000k")
-        self.assertEqual(args[args.index("-maxrate") + 1], "5000k")
+        self.assertEqual(args[args.index("-maxrate") + 1], "4000k")
 
     def test_videotoolbox_high_quality_does_not_exceed_source_bitrate(self) -> None:
         args = gpu_encoder_quality_args(

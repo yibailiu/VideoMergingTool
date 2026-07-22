@@ -39,6 +39,7 @@ class MergeValidationTests(unittest.TestCase):
                         expected_duration=100.0,
                         expected_file_count=10,
                     )
+                self.assertFalse(output.exists())
 
     def test_oversized_output_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -54,6 +55,7 @@ class MergeValidationTests(unittest.TestCase):
                         expected_source_size=1024,
                         expected_file_count=10,
                     )
+                self.assertFalse(output.exists())
 
 
 def _video(path: Path, duration: float) -> VideoFile:

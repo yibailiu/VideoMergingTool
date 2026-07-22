@@ -117,14 +117,21 @@ def gpu_encoder_quality_args(
     source_bitrate: int | None = None,
 ) -> list[str]:
     if not encoder:
-        return _cpu_encoder_quality_args("libx264", crf, preset)
+        return _with_bitrate_limit(_cpu_encoder_quality_args("libx264", crf, preset), source_bitrate)
     if encoder in {"libx264", "libx265"}:
-        return _cpu_encoder_quality_args(encoder, crf, preset)
+        return _with_bitrate_limit(_cpu_encoder_quality_args(encoder, crf, preset), source_bitrate)
     if encoder in {"h264_nvenc", "hevc_nvenc"}:
-        return ["-cq", str(crf), "-preset", _nvenc_preset(preset), "-rc", "vbr"]
+        return _with_bitrate_limit(
+            ["-cq", str(crf), "-preset", _nvenc_preset(preset), "-rc", "vbr"],
+            source_bitrate,
+        )
     if encoder in {"h264_qsv", "hevc_qsv"}:
+        if source_bitrate and source_bitrate > 0:
+            return _with_bitrate_limit([], source_bitrate)
         return ["-global_quality", str(crf)]
     if encoder in {"h264_amf", "hevc_amf"}:
+        if source_bitrate and source_bitrate > 0:
+            return _with_bitrate_limit(["-quality", "balanced"], source_bitrate)
         return ["-quality", "balanced", "-qp_i", str(crf), "-qp_p", str(crf), "-qp_b", str(crf)]
     if encoder in {"h264_videotoolbox", "hevc_videotoolbox"}:
         bitrate = _videotoolbox_bitrate(
@@ -135,15 +142,15 @@ def gpu_encoder_quality_args(
             source_bitrate=source_bitrate,
             hevc=encoder == "hevc_videotoolbox",
         )
-        maxrate = int(bitrate * 1.25)
+        maxrate = bitrate
         bufsize = int(bitrate * 2)
         args = ["-b:v", f"{bitrate}k", "-maxrate", f"{maxrate}k", "-bufsize", f"{bufsize}k", "-allow_sw", "1"]
         if encoder == "h264_videotoolbox":
             args.extend(["-profile:v", "high"])
         return args
     if encoder == "mpeg4":
-        return ["-q:v", str(_mpeg4_quality(crf))]
-    return ["-crf", str(crf), "-preset", preset]
+        return _with_bitrate_limit(["-q:v", str(_mpeg4_quality(crf))], source_bitrate)
+    return _with_bitrate_limit(["-crf", str(crf), "-preset", preset], source_bitrate)
 
 
 def _cpu_encoder_quality_args(encoder: str, crf: int, preset: str) -> list[str]:
@@ -151,6 +158,21 @@ def _cpu_encoder_quality_args(encoder: str, crf: int, preset: str) -> list[str]:
     if encoder == "libx264":
         args.extend(["-profile:v", "high"])
     return args
+
+
+def _with_bitrate_limit(args: list[str], source_bitrate: int | None) -> list[str]:
+    if not source_bitrate or source_bitrate <= 0:
+        return args
+    bitrate_kbps = max(400, source_bitrate // 1000)
+    return [
+        *args,
+        "-b:v",
+        f"{bitrate_kbps}k",
+        "-maxrate",
+        f"{bitrate_kbps}k",
+        "-bufsize",
+        f"{bitrate_kbps * 2}k",
+    ]
 
 
 def _candidate_modes(gpu_mode: GpuMode) -> tuple[GpuMode, ...]:

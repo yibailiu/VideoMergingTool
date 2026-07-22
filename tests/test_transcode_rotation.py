@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import logging
+import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
 
@@ -9,6 +11,8 @@ from videomerge.errors import CommandError
 from videomerge.models import Canvas, CodecPlan, Orientation, ToolPaths, VideoFile
 from videomerge.transcode import (
     AudioTarget,
+    PreprocessSegment,
+    _log_size_estimate,
     build_preprocess_segments,
     build_video_filter,
     can_concat_originals,
@@ -28,7 +32,11 @@ class TranscodeRotationTests(unittest.TestCase):
         video_filter = build_video_filter(90, Canvas(720, 1280), 30.0, "black")
 
         self.assertTrue(video_filter.startswith("transpose=2,"))
-        self.assertIn("scale=w=720:h=1280:force_original_aspect_ratio=decrease", video_filter)
+        self.assertIn(
+            "scale=w='min(iw,720)':h='min(ih,1280)':"
+            "force_original_aspect_ratio=decrease:force_divisible_by=2",
+            video_filter,
+        )
         self.assertIn("pad=720:1280:(ow-iw)/2:(oh-ih)/2:color=black", video_filter)
 
     def test_rotation_270_uses_opposite_transpose_direction(self) -> None:
@@ -345,6 +353,22 @@ class TranscodeRotationTests(unittest.TestCase):
                     source,
                     Canvas(1280, 720),
                     ToolPaths(ffmpeg=Path("ffmpeg"), ffprobe=Path("ffprobe")),
+                    logging.getLogger("test"),
+                )
+
+    def test_preflight_rejects_estimated_size_blowup(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "source.mp4"
+            path.write_bytes(b"x" * 1024 * 1024)
+            file = replace(_plain_video(), path=path, duration=10.0, video_bitrate=100_000_000)
+
+            with self.assertRaises(CommandError):
+                _log_size_estimate(
+                    [file],
+                    [PreprocessSegment(files=[file], action="transcode")],
+                    None,
+                    100_000_000,
+                    AudioTarget("aac", "aac", 48000, 2, "128k"),
                     logging.getLogger("test"),
                 )
 

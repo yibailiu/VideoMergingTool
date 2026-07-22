@@ -99,9 +99,7 @@ def preprocess_group(
         files,
         segments,
         passthrough_signature,
-        target_video_bitrate
-        if gpu_plan is not None and gpu_plan.encoder in {"h264_videotoolbox", "hevc_videotoolbox"}
-        else 0,
+        target_video_bitrate,
         audio_target,
         logger,
     )
@@ -667,10 +665,12 @@ def _log_size_estimate(
         source_total / (1024**3),
         ratio,
     )
-    if ratio > 1.5:
-        logger.warning(
-            "Estimated output exceeds source size by %.2fx. Consider dominant resolution or a smaller quality profile.",
-            ratio,
+    allowed_size = int(source_total * 1.15) + 16 * 1024 * 1024
+    if estimated_total > allowed_size:
+        raise CommandError(
+            "Estimated output exceeds the source-size safety limit before transcoding: "
+            f"estimated={estimated_total} bytes, sources={source_total} bytes, "
+            f"ratio={ratio:.2f}x, limit={allowed_size} bytes"
         )
 
 
@@ -685,7 +685,8 @@ def build_video_filter(rotation: int, canvas: Canvas, fps: float, pad_color: str
 
     filters.extend(
         [
-            f"scale=w={canvas.width}:h={canvas.height}:force_original_aspect_ratio=decrease",
+            f"scale=w='min(iw,{canvas.width})':h='min(ih,{canvas.height})':"
+            "force_original_aspect_ratio=decrease:force_divisible_by=2",
             f"pad={canvas.width}:{canvas.height}:(ow-iw)/2:(oh-ih)/2:color={pad_color}",
             "setsar=1",
             f"fps={fps:.3f}",
@@ -723,9 +724,25 @@ def validate_preprocessed_output(
     if source_file.duration > 0:
         tolerance = max(0.25, min(2.0, source_file.duration * 0.005))
         if media.duration + tolerance < source_file.duration:
+            output_path.unlink(missing_ok=True)
             raise CommandError(
                 f"Preprocessed file is shorter than its source: {source_file.path.name} -> {output_path} "
                 f"duration={media.duration:.3f}s, expected at least {source_file.duration - tolerance:.3f}s"
+            )
+    try:
+        source_size = source_file.path.stat().st_size
+        output_size = output_path.stat().st_size
+    except OSError:
+        source_size = 0
+        output_size = 0
+    if source_size > 0:
+        allowed_size = int(source_size * 1.25) + 1024 * 1024
+        if output_size > allowed_size:
+            output_path.unlink(missing_ok=True)
+            raise CommandError(
+                f"Preprocessed file exceeds its source-size safety limit: {source_file.path.name} -> "
+                f"{output_path} output={output_size} bytes, source={source_size} bytes, "
+                f"limit={allowed_size} bytes"
             )
     if expected_fps is not None and not _fps_matches(media.frame_rate_float, expected_fps):
         raise CommandError(
