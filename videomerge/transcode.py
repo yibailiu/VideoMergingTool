@@ -121,7 +121,6 @@ def preprocess_group(
 
     # 包装单个分段的处理逻辑
     def worker(idx: int, segment: PreprocessSegment) -> tuple[int, list[Path]]:
-        output_path = temp_dir / f"{(idx + 1):04d}_{segment.files[0].stem_safe}.mp4"
         if (
             segment.copy_compatible
             and passthrough_signature is not None
@@ -134,16 +133,33 @@ def preprocess_group(
             processed_paths = [file.path for file in segment.files]
         else:
             action = _effective_segment_action(segment, passthrough_signature)
-            processed_path = preprocess_file(
-                file=segment.files[0], output_path=output_path, canvas=canvas, fps=fps,
-                codec_plan=codec_plan, audio_target=audio_target, tools=tools, logger=logger,
-                pad_color=pad_color, crf=crf, preset=preset, dry_run=dry_run, gpu_plan=gpu_plan,
-                force_video_transcode=action == "transcode" and segment.action == "copy",
-                force_remux=action == "remux" and segment.action == "copy",
-                target_video_bitrate=target_video_bitrate,
-                target_video_timescale=target_video_timescale,
-            )
-            processed_paths = [processed_path]
+            processed_paths = []
+            for file_idx, file in enumerate(segment.files):
+                if len(segment.files) == 1:
+                    output_name = f"{(idx + 1):04d}_{file.stem_safe}.mp4"
+                else:
+                    output_name = f"{(idx + 1):04d}_{(file_idx + 1):04d}_{file.stem_safe}.mp4"
+                processed_paths.append(
+                    preprocess_file(
+                        file=file,
+                        output_path=temp_dir / output_name,
+                        canvas=canvas,
+                        fps=fps,
+                        codec_plan=codec_plan,
+                        audio_target=audio_target,
+                        tools=tools,
+                        logger=logger,
+                        pad_color=pad_color,
+                        crf=crf,
+                        preset=preset,
+                        dry_run=dry_run,
+                        gpu_plan=gpu_plan,
+                        force_video_transcode=action == "transcode" and segment.action == "copy",
+                        force_remux=action == "remux" and segment.action == "copy",
+                        target_video_bitrate=target_video_bitrate,
+                        target_video_timescale=target_video_timescale,
+                    )
+                )
         return idx, processed_paths
 
     is_gpu_enabled = gpu_plan is not None and gpu_plan.enabled
@@ -169,6 +185,16 @@ def preprocess_group(
                     progress_callback(file)
 
     flattened_outputs = [path for segment_paths in outputs for path in segment_paths]
+    if len(flattened_outputs) != len(files):
+        raise CommandError(
+            "Preprocess output count mismatch: "
+            f"produced {len(flattened_outputs)} output file(s) for {len(files)} source file(s)."
+        )
+    logger.info(
+        "Preprocess outputs verified: %d source file(s), %d output file(s).",
+        len(files),
+        len(flattened_outputs),
+    )
     if keep_temp:
         logger.info("Keeping temp files in %s", temp_dir)
         return flattened_outputs, None

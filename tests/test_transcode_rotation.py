@@ -318,6 +318,51 @@ class TranscodeRotationTests(unittest.TestCase):
         self.assertEqual(len(concat_commands), 0)
         self.assertEqual(len(transcode_commands), 0)
 
+    def test_preprocess_group_remuxes_every_file_in_non_dominant_ready_segment(self) -> None:
+        captured_commands = []
+        dominant = [
+            replace(_plain_video(), path=Path(f"dominant-{index}.mp4"))
+            for index in range(3)
+        ]
+        alternate = [
+            replace(
+                _plain_video(),
+                path=Path(f"alternate-{index}.mp4"),
+                video_time_base="1/90000",
+            )
+            for index in range(2)
+        ]
+
+        def fake_run_command(args, logger, dry_run=False):  # type: ignore[no-untyped-def]
+            captured_commands.append(list(args))
+
+        with patch("videomerge.transcode.run_command", side_effect=fake_run_command):
+            outputs, owner = preprocess_group(
+                files=[*dominant, *alternate],
+                canvas=Canvas(1280, 720),
+                fps=30.0,
+                codec_plan=CodecPlan("h264", "aac", "libx264", "aac"),
+                tools=ToolPaths(ffmpeg=Path("ffmpeg"), ffprobe=Path("ffprobe")),
+                logger=logging.getLogger("test"),
+                pad_color="black",
+                crf=23,
+                preset="medium",
+                keep_temp=False,
+                dry_run=True,
+            )
+            if owner:
+                owner.cleanup()
+
+        self.assertEqual(len(outputs), 5)
+        self.assertEqual(outputs[:3], [file.path for file in dominant])
+        self.assertTrue(all(output != file.path for output, file in zip(outputs[3:], alternate)))
+        self.assertEqual(len(captured_commands), 2)
+        self.assertTrue(all("-vf" not in command for command in captured_commands))
+        self.assertEqual(
+            [command[command.index("-i") + 1] for command in captured_commands],
+            [file.path for file in alternate],
+        )
+
     def test_container_only_difference_uses_remux(self) -> None:
         file = _plain_video().__class__(**{**_plain_video().__dict__, "path": Path("clip.mkv"), "container": "matroska"})
         action = choose_preprocess_action(
