@@ -410,7 +410,7 @@ def remux_copy(
 
 
 def choose_video_action(file: VideoFile, canvas: Canvas, fps: float, codec_plan: CodecPlan) -> str:
-    if file.rotation != 0:
+    if file.rotation != 0 or file.manual_rotation != 0:
         return "transcode"
     if file.display_width != canvas.width or file.display_height != canvas.height:
         return "transcode"

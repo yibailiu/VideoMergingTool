@@ -29,6 +29,7 @@ The packaged Windows and macOS apps include FFmpeg and FFprobe, so normal users 
 
 - Finds common video files in a folder, including `mp4`, `mkv`, `mov`, `avi`, `ts`, `m4v`, `flv`, and `webm`
 - Shows useful details such as duration, resolution, codec, FPS, and status
+- Opens a source in the system video player and lets you mark rotation or exclusion without modifying the source file or list order
 - Merges videos in a predictable order, with common sorting options
 - Supports landscape and portrait videos
 - Keeps the original picture visible when resizing is needed; it pads instead of cropping

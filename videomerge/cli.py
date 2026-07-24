@@ -8,6 +8,7 @@ from typing import Optional
 
 import typer
 
+from .adjustments import apply_clockwise_rotation, validate_clockwise_rotation
 from .env_check import default_tools_dir, resolve_tools
 from .errors import CommandError, DependencyError, VideoMergeError
 from .grouping import group_fast, split_by_orientation
@@ -98,8 +99,9 @@ def merge(
             ffprobe_path=ffprobe_path,
         )
 
+        manual_rotations: dict[Path, int] = {}
         if selected_files:
-            paths = _load_selected_video_files(selected_files, input_dir)
+            paths, manual_rotations = _load_selected_video_manifest(selected_files, input_dir)
             logger.info("Loaded %d selected video file(s) from %s", len(paths), selected_files)
         else:
             paths = scan_video_files(input_dir, recursive=recursive, sort_by=sort_by)
@@ -110,11 +112,32 @@ def merge(
         media_files, failures = probe_files(paths, tools, logger)
         if not selected_files:
             media_files = sort_probed_files(media_files, input_dir, sort_by)
+        elif manual_rotations:
+            media_files = [
+                apply_clockwise_rotation(file, manual_rotations.get(file.path.resolve(), 0))
+                for file in media_files
+            ]
+            for file in media_files:
+                clockwise_rotation = manual_rotations.get(file.path.resolve(), 0)
+                if clockwise_rotation:
+                    logger.info(
+                        "Manual adjustment: %s | clockwise=%d effective_rotation=%d display=%dx%d orientation=%s",
+                        file.path.name,
+                        clockwise_rotation,
+                        file.rotation,
+                        file.display_width,
+                        file.display_height,
+                        file.orientation.value,
+                    )
         if failures:
             for path, reason in failures.items():
                 logger.warning("Probe failure: %s | %s", path, reason)
         if not media_files:
             raise VideoMergeError("No readable video files found.")
+        if mode == MergeMode.fast and any(manual_rotations.values()):
+            raise VideoMergeError(
+                "Manual rotation requires Optimal or Extreme mode; Fast mode only performs stream copy."
+            )
         progress = ProgressReporter(total_units=_estimate_progress_units(mode, media_files), logger=logger)
         progress.advance(0, "analysis complete")
 
@@ -263,6 +286,14 @@ def _resolve_quality_settings(quality_profile: str, crf: int | None, preset: str
 
 
 def _load_selected_video_files(selected_files: Path, input_dir: Path) -> list[Path]:
+    paths, _manual_rotations = _load_selected_video_manifest(selected_files, input_dir)
+    return paths
+
+
+def _load_selected_video_manifest(
+    selected_files: Path,
+    input_dir: Path,
+) -> tuple[list[Path], dict[Path, int]]:
     if not selected_files.exists():
         raise VideoMergeError(f"Selected file list does not exist: {selected_files}")
     try:
@@ -274,11 +305,23 @@ def _load_selected_video_files(selected_files: Path, input_dir: Path) -> list[Pa
 
     root = input_dir.resolve()
     paths: list[Path] = []
+    manual_rotations: dict[Path, int] = {}
     seen: set[Path] = set()
     for item in payload:
-        if not isinstance(item, str):
-            raise VideoMergeError("Selected file list contains a non-string path.")
-        path = Path(item).expanduser().resolve()
+        if isinstance(item, str):
+            raw_path = item
+            clockwise_rotation = 0
+        elif isinstance(item, dict):
+            raw_path = item.get("path")
+            if not isinstance(raw_path, str):
+                raise VideoMergeError("Selected file entry must contain a string path.")
+            try:
+                clockwise_rotation = validate_clockwise_rotation(item.get("rotate_clockwise", 0))
+            except ValueError as exc:
+                raise VideoMergeError(f"Invalid manual rotation for selected file: {raw_path}") from exc
+        else:
+            raise VideoMergeError("Selected file list entries must be paths or adjustment objects.")
+        path = Path(raw_path).expanduser().resolve()
         try:
             path.relative_to(root)
         except ValueError as exc:
@@ -291,7 +334,9 @@ def _load_selected_video_files(selected_files: Path, input_dir: Path) -> list[Pa
             raise VideoMergeError(f"Selected file is not a supported video format: {path}")
         seen.add(path)
         paths.append(path)
-    return paths
+        if clockwise_rotation:
+            manual_rotations[path] = clockwise_rotation
+    return paths, manual_rotations
 
 
 def _log_merge_summary(total_video_count: int, merged_video_count: int, logger: logging.Logger) -> None:

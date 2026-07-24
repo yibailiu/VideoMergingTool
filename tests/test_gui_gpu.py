@@ -10,6 +10,7 @@ from videomerge.gui import (
     _build_gui_plan,
     _build_merge_command,
     _detect_gui_ffmpeg_encoders,
+    _open_media_file,
     _serialize_files,
     _windows_notification_script,
 )
@@ -58,6 +59,29 @@ class GuiGpuTests(unittest.TestCase):
 
         self.assertEqual(selected, ["/tmp/in/a.mp4", "/tmp/in/b.mp4"])
 
+    def test_gui_command_writes_ordered_rotation_adjustments(self) -> None:
+        command = _build_merge_command(
+            {
+                "input_dir": "/tmp/in",
+                "selected_files": ["/tmp/in/b.mp4", "/tmp/in/a.mp4"],
+                "rotation_overrides": {"/tmp/in/a.mp4": 90},
+            }
+        )
+        try:
+            list_path = Path(command[command.index("--selected-files") + 1])
+            selected = json.loads(list_path.read_text(encoding="utf-8"))
+        finally:
+            if "--selected-files" in command:
+                Path(command[command.index("--selected-files") + 1]).unlink(missing_ok=True)
+
+        self.assertEqual(
+            selected,
+            [
+                {"path": "/tmp/in/b.mp4", "rotate_clockwise": 0},
+                {"path": "/tmp/in/a.mp4", "rotate_clockwise": 90},
+            ],
+        )
+
     def test_serialize_files_includes_media_creation_date_and_file_size(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             path = Path(temp_dir) / "clip.mp4"
@@ -103,6 +127,55 @@ class GuiGpuTests(unittest.TestCase):
         self.assertEqual(payload["plan"]["remux_count"], 1)
         self.assertEqual(payload["plan"]["transcode_count"], 0)
         self.assertEqual(actions["container.mkv"], "remux")
+
+    def test_gui_plan_applies_manual_rotation_without_reordering_files(self) -> None:
+        first = _video(Path("first.mp4"))
+        second = _video(Path("second.mp4"))
+
+        payload = _build_gui_plan(
+            [first, second],
+            [first, second],
+            {
+                "mode": "optimal",
+                "rotation_overrides": {"second.mp4": 90},
+            },
+        )
+
+        self.assertEqual([item["name"] for item in payload["files"]], ["first.mp4", "second.mp4"])
+        rotated = payload["files"][1]
+        self.assertEqual(rotated["manual_rotation"], 90)
+        self.assertEqual((rotated["display_width"], rotated["display_height"]), (720, 1280))
+        self.assertEqual(rotated["orientation"], "portrait")
+        self.assertEqual(rotated["planned_action"], "transcode")
+
+    def test_gui_fast_plan_marks_manual_rotation_as_blocked(self) -> None:
+        video = _video(Path("clip.mp4"))
+
+        payload = _build_gui_plan(
+            [video],
+            [video],
+            {"mode": "fast", "rotation_overrides": {"clip.mp4": 90}},
+        )
+
+        self.assertEqual(payload["files"][0]["planned_action"], "rotation_required")
+        self.assertEqual(payload["plan"]["rotation_blocked_count"], 1)
+
+    def test_open_media_file_uses_macos_default_application(self) -> None:
+        with patch("videomerge.gui.platform.system", return_value="Darwin"), patch(
+            "videomerge.gui.subprocess.Popen"
+        ) as popen:
+            _open_media_file(Path("/tmp/clip.mp4"))
+
+        self.assertEqual(popen.call_args.args[0], ["open", "/tmp/clip.mp4"])
+
+    def test_open_media_file_uses_windows_file_association(self) -> None:
+        with patch("videomerge.gui.platform.system", return_value="Windows"), patch(
+            "videomerge.gui.os.startfile",
+            create=True,
+        ) as startfile:
+            _open_media_file(Path("C:/clips/clip.mp4"))
+
+        startfile.assert_called_once_with("C:/clips/clip.mp4")
 
     def test_windows_notification_script_uses_notify_icon_and_sound(self) -> None:
         script = _windows_notification_script("A&B's", "done", True)

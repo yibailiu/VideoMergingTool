@@ -95,6 +95,7 @@ def choose_dominant_source_profile(files: Iterable[VideoFile]) -> DominantSource
         for file in file_list
         if file.path.suffix.lower() in {".mp4", ".m4v", ".mov"}
         and file.rotation == 0
+        and file.manual_rotation == 0
         and file.pixel_format == "yuv420p"
         and file.has_audio
     ]

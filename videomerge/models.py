@@ -49,6 +49,7 @@ class VideoFile:
     audio_channels: int = 0
     media_created_at: Optional[float] = None
     video_time_base: str = ""
+    manual_rotation: int = 0
 
     @property
     def stem_safe(self) -> str:

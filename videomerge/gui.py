@@ -22,6 +22,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
+from .adjustments import apply_clockwise_rotation, validate_clockwise_rotation
 from .env_check import default_tools_dir, resolve_tools
 from .grouping import group_fast, split_by_orientation
 from .gpu import detect_ffmpeg_encoders
@@ -256,7 +257,7 @@ HTML = r"""<!doctype html>
       color: var(--text-muted);
       white-space: nowrap;
     }
-    table { width: 100%; min-width: 820px; border-collapse: collapse; table-layout: fixed; }
+    table { width: 100%; min-width: 800px; border-collapse: collapse; table-layout: fixed; }
     th {
       position: sticky;
       top: 0;
@@ -264,14 +265,14 @@ HTML = r"""<!doctype html>
       background: var(--bg-panel);
       color: var(--text-muted);
       text-align: left;
-      padding: 11px 16px;
+      padding: 11px 10px;
       border-bottom: 1px solid var(--border-subtle);
       font-size: 11px;
       text-transform: uppercase;
       letter-spacing: .08em;
     }
     td {
-      padding: 10px 16px;
+      padding: 10px;
       border-bottom: 1px solid var(--border-subtle);
       color: var(--text-secondary);
       font-size: 13px;
@@ -280,15 +281,83 @@ HTML = r"""<!doctype html>
       text-overflow: ellipsis;
     }
     .mono { font-family: var(--font-mono); }
-    .group-row td {
-      background: var(--bg-body);
-      color: var(--text-secondary);
-      font-size: 11px;
-      text-transform: uppercase;
-      letter-spacing: .06em;
-    }
     .status-ok { color: var(--accent-green); }
     .status-warn { color: var(--accent-yellow); }
+    .status-blocked { color: var(--accent-red); }
+    .file-row.excluded td:not(.actions-cell) {
+      opacity: .48;
+    }
+    .file-row.excluded .file-link {
+      text-decoration: line-through;
+    }
+    .file-link {
+      display: block;
+      flex: 1 1 auto;
+      min-width: 0;
+      max-width: 100%;
+      padding: 0;
+      border: 0;
+      border-radius: 0;
+      background: transparent;
+      color: var(--accent-blue);
+      text-align: left;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      vertical-align: middle;
+    }
+    .file-name-content {
+      display: flex;
+      align-items: center;
+      min-width: 0;
+    }
+    .file-link:hover {
+      color: #69b7eb;
+      background: transparent;
+      border-color: transparent;
+      text-decoration: underline;
+    }
+    .rotation-badge {
+      display: inline-block;
+      flex: 0 0 auto;
+      margin-left: 4px;
+      padding: 2px 4px;
+      border-radius: 4px;
+      background: rgba(212,163,91,.18);
+      color: var(--accent-yellow);
+      font: 10px/1.2 var(--font-mono);
+      vertical-align: middle;
+    }
+    .actions-cell {
+      padding-left: 8px;
+      padding-right: 8px;
+      overflow: visible;
+    }
+    .file-actions {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 5px;
+    }
+    .file-action {
+      width: 28px;
+      height: 28px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      padding: 0;
+      border-radius: var(--radius-input);
+      color: var(--text-secondary);
+      font-size: 16px;
+      line-height: 1;
+    }
+    .file-action.remove { color: var(--accent-red); }
+    .file-action.restore { color: var(--accent-green); }
+    .file-action.rotate.active {
+      color: var(--accent-yellow);
+      background: rgba(212,163,91,.14);
+      border-color: rgba(212,163,91,.45);
+    }
     .select-cell, .select-head {
       text-align: center;
       padding-left: 10px;
@@ -550,18 +619,19 @@ HTML = r"""<!doctype html>
           <table>
             <colgroup>
               <col style="width: 46px">
-              <col style="width: 22%">
-              <col style="width: 11%">
-              <col style="width: 12%">
-              <col style="width: 8%">
-              <col style="width: 8%">
-              <col style="width: 16%">
+              <col style="width: 20%">
               <col style="width: 9%">
+              <col style="width: 10%">
+              <col style="width: 6%">
+              <col style="width: 7%">
+              <col style="width: 14%">
               <col style="width: 8%">
+              <col style="width: 10%">
+              <col style="width: 76px">
             </colgroup>
             <thead>
               <tr>
-                <th class="select-head"></th><th data-i18n="filename">Filename</th><th data-i18n="resolution">Resolution</th><th data-i18n="codec">Codec</th><th>FPS</th><th data-i18n="duration">Dur</th><th data-i18n="mediaCreatedTime">Media Created</th><th data-i18n="fileSize">Size</th><th data-i18n="status">Status</th>
+                <th class="select-head"></th><th data-i18n="filename">Filename</th><th data-i18n="resolution">Resolution</th><th data-i18n="codec">Codec</th><th>FPS</th><th data-i18n="duration">Dur</th><th data-i18n="mediaCreatedTime">Media Created</th><th data-i18n="fileSize">Size</th><th data-i18n="status">Status</th><th data-i18n="actions">Actions</th>
               </tr>
             </thead>
             <tbody id="fileRows"></tbody>
@@ -654,7 +724,7 @@ HTML = r"""<!doctype html>
     const messages = {
       en: {
         ffmpegNotChecked: "! FFmpeg Not Checked", ffmpegChecking: "... Checking FFmpeg", ffmpegInstalled: "✓ FFmpeg Installed", ffmpegMissing: "! FFmpeg Missing", refreshFfmpeg: "Refresh FFmpeg check",
-        sourceFiles: "Source Files", noFolderSelected: "No folder selected", selectFolder: "Select Folder", filename: "Filename", resolution: "Resolution", codec: "Codec", duration: "Dur", mediaCreatedTime: "Media Created", fileSize: "Size", status: "Status",
+        sourceFiles: "Source Files", noFolderSelected: "No folder selected", selectFolder: "Select Folder", filename: "Filename", resolution: "Resolution", codec: "Codec", duration: "Dur", mediaCreatedTime: "Media Created", fileSize: "Size", status: "Status", actions: "Actions",
         processConsole: "Process Console", configuration: "Configuration", mergeStrategy: "Merge Strategy", outputSettings: "Output Settings", browse: "Browse",
         fastMerge: "Fast Merge", optimalMerge: "Optimal Merge", extremeMerge: "Extreme Merge", lossless: "Lossless", smart: "Smart", bruteForce: "Brute Force",
         fastDesc: "Stream copy only. Skips incompatible groups.", optimalDesc: "Groups by orientation and transcodes when needed.", extremeDesc: "Normalizes all files into one output.",
@@ -674,8 +744,11 @@ HTML = r"""<!doctype html>
         fastPlan: "Tool will stream-copy compatible groups only. Incompatible files will be skipped.",
         optimalPlan: "Tool will create up to {count} output file(s), separated by landscape and portrait display orientation.",
         extremePlan: "Tool will normalize all files to one display canvas and produce one output file.",
-        groupLabel: "{orientation} group ({size})", ready: "Ready", needsRemux: "Remux Only", needsAudio: "Audio Only", needsTranscode: "Needs Transcode", skipped: "Skipped", excluded: "Not Selected", summary: "{files} files detected - {groups} groups",
+        ready: "Ready", needsRemux: "Remux Only", needsAudio: "Audio Only", needsTranscode: "Needs Transcode", rotationRequired: "Rotation Requires Transcode", skipped: "Skipped", excluded: "Not Selected", summary: "{files} files detected - {groups} groups",
         planCounts: "{copy} copy, {remux} remux, {audio} audio only, {transcode} video transcode, {skipped} skipped.",
+        openFile: "Play with the system default video player", rotateClockwise: "Rotate clockwise 90° for this merge", excludeFile: "Exclude from this merge without deleting the source", restoreFile: "Restore to this merge", rotatedClockwise: "CW {degrees}°",
+        fastRotationUnsupported: "Manual rotation requires Optimal or Extreme mode. Fast mode only performs stream copy.",
+        openFileFailed: "Could not open the video with the system default player.",
         folderCancelled: "Folder selection was cancelled or is unavailable on this system.", scanning: "Scanning {path}", filesAnalyzed: "{count} files analyzed.",
         startingMerge: "Starting {mode} merge", stoppingMerge: "Stopping current merge task...", selectBegin: "Select a source folder to begin.",
         mergeCompletedTitle: "Merge Completed", mergeCompletedBody: "Your video merge task has finished.", mergeFailedTitle: "Merge Failed", mergeFailedBody: "The merge task ended with an error. Check the process console for details.",
@@ -707,7 +780,7 @@ HTML = r"""<!doctype html>
       },
       zh: {
         ffmpegNotChecked: "! FFmpeg 未检查", ffmpegChecking: "... 正在检查 FFmpeg", ffmpegInstalled: "✓ FFmpeg 已安装", ffmpegMissing: "! FFmpeg 缺失", refreshFfmpeg: "重新检查 FFmpeg",
-        sourceFiles: "源文件", noFolderSelected: "未选择文件夹", selectFolder: "选择文件夹", filename: "文件名", resolution: "分辨率", codec: "编码", duration: "时长", mediaCreatedTime: "创建媒体日期", fileSize: "大小", status: "状态",
+        sourceFiles: "源文件", noFolderSelected: "未选择文件夹", selectFolder: "选择文件夹", filename: "文件名", resolution: "分辨率", codec: "编码", duration: "时长", mediaCreatedTime: "创建媒体日期", fileSize: "大小", status: "状态", actions: "操作",
         processConsole: "处理控制台", configuration: "配置", mergeStrategy: "合并策略", outputSettings: "输出设置", browse: "浏览",
         fastMerge: "快速合并", optimalMerge: "智能合并", extremeMerge: "强制合并", lossless: "无损", smart: "智能", bruteForce: "强制",
         fastDesc: "仅使用流复制，跳过不兼容分组。", optimalDesc: "按横竖屏分组，必要时转码。", extremeDesc: "统一所有文件到一个输出。",
@@ -727,8 +800,11 @@ HTML = r"""<!doctype html>
         fastPlan: "工具将仅对兼容分组合并，跳过不兼容文件。",
         optimalPlan: "工具将按横竖屏生成最多 {count} 个输出文件。",
         extremePlan: "工具将把所有文件统一到一个画布并生成一个输出文件。",
-        groupLabel: "{orientation} 分组（{size}）", ready: "就绪", needsRemux: "仅重封装", needsAudio: "仅音频转码", needsTranscode: "需要视频转码", skipped: "将跳过", excluded: "未选中", summary: "检测到 {files} 个文件 - {groups} 个分组",
+        ready: "就绪", needsRemux: "仅重封装", needsAudio: "仅音频转码", needsTranscode: "需要视频转码", rotationRequired: "旋转需要转码", skipped: "将跳过", excluded: "未选中", summary: "检测到 {files} 个文件 - {groups} 个分组",
         planCounts: "直通 {copy} 个，重封装 {remux} 个，仅音频 {audio} 个，视频转码 {transcode} 个，跳过 {skipped} 个。",
+        openFile: "使用系统默认视频播放器播放", rotateClockwise: "本次合并顺时针旋转 90°", excludeFile: "从本次合并排除，不删除源文件", restoreFile: "恢复到本次合并", rotatedClockwise: "顺时针 {degrees}°",
+        fastRotationUnsupported: "人工旋转需要使用智能合并或强制合并；快速合并只执行流复制。",
+        openFileFailed: "无法使用系统默认播放器打开视频。",
         folderCancelled: "文件夹选择已取消，或当前系统不可用。", scanning: "正在扫描 {path}", filesAnalyzed: "已分析 {count} 个文件。",
         startingMerge: "开始 {mode} 合并", stoppingMerge: "正在停止当前合并任务...", selectBegin: "请选择源文件夹开始。",
         mergeCompletedTitle: "合并完成", mergeCompletedBody: "视频合并任务已完成。", mergeFailedTitle: "合并失败", mergeFailedBody: "合并任务发生错误，请查看处理控制台。", mergeStoppedTitle: "合并已停止", mergeStoppedBody: "用户已手动停止当前合并任务。",
@@ -761,8 +837,10 @@ HTML = r"""<!doctype html>
     const state = {
       mode: "optimal",
       inputDir: "",
+      scannedInputDir: "",
       files: [],
       selectedPaths: new Set(),
+      rotationOverrides: new Map(),
       plan: null,
       running: false,
       statusTimer: null,
@@ -818,6 +896,7 @@ HTML = r"""<!doctype html>
       const button = $("startMerge");
       button.textContent = running ? t("stopMerge") : t("startMerge");
       button.classList.toggle("stop", running);
+      document.querySelectorAll(".file-checkbox, .file-action").forEach(node => { node.disabled = running; });
       updateSelectionControls();
     }
     async function api(path, body) {
@@ -931,6 +1010,14 @@ HTML = r"""<!doctype html>
     function selectedFiles() {
       return state.files.filter(file => state.selectedPaths.has(file.path));
     }
+    function selectedRotationCount() {
+      return selectedFiles().filter(file => (state.rotationOverrides.get(file.path) || 0) !== 0).length;
+    }
+    function rotationPayload() {
+      return Object.fromEntries(
+        Array.from(state.rotationOverrides.entries()).filter(([, rotation]) => rotation !== 0)
+      );
+    }
     function updateSelectionControls() {
       const total = state.files.length;
       const selected = selectedFiles().length;
@@ -952,9 +1039,24 @@ HTML = r"""<!doctype html>
     function setFileSelected(path, selected) {
       if (selected) state.selectedPaths.add(path);
       else state.selectedPaths.delete(path);
-      updateSelectionControls();
-      updatePlan();
+      renderFiles(state.files);
       refreshPlan();
+    }
+    function rotateFile(path) {
+      const current = state.rotationOverrides.get(path) || 0;
+      const next = (current + 90) % 360;
+      if (next) state.rotationOverrides.set(path, next);
+      else state.rotationOverrides.delete(path);
+      renderFiles(state.files);
+      refreshPlan();
+    }
+    async function openFile(path) {
+      try {
+        await api("/open-media", { path });
+      } catch (error) {
+        log(`ERROR: ${error.message}`);
+        showToast(t("openFileFailed"), error.message, "error");
+      }
     }
     function updatePlan() {
       if (!state.files.length) {
@@ -964,6 +1066,10 @@ HTML = r"""<!doctype html>
       const files = selectedFiles();
       if (!files.length) {
         $("planText").textContent = t("noSelectedFiles");
+        return;
+      }
+      if (state.mode === "fast" && selectedRotationCount() > 0) {
+        $("planText").textContent = t("fastRotationUnsupported");
         return;
       }
       const groups = new Set(files.map(file => file.orientation));
@@ -988,38 +1094,53 @@ HTML = r"""<!doctype html>
     function renderFiles(files) {
       const rows = $("fileRows");
       rows.innerHTML = "";
-      const by = {};
       files.forEach(file => {
-        const key = file.orientation || "unknown";
-        (by[key] ||= []).push(file);
+        const action = file.planned_action || "unknown";
+        const cls = action === "copy" || action === "remux"
+          ? "status-ok"
+          : action === "rotation_required" ? "status-blocked" : "status-warn";
+        const statusKeys = { copy: "ready", remux: "needsRemux", audio: "needsAudio", transcode: "needsTranscode", rotation_required: "rotationRequired", skipped: "skipped", excluded: "excluded" };
+        const status = t(statusKeys[action] || "needsTranscode");
+        const selected = state.selectedPaths.has(file.path);
+        const checked = selected ? "checked" : "";
+        const disabled = state.running ? "disabled" : "";
+        const manualRotation = state.rotationOverrides.get(file.path) || 0;
+        const rotationBadge = manualRotation
+          ? `<span class="rotation-badge" title="${escapeHtml(t("rotatedClockwise", { degrees: manualRotation }))}">↻${manualRotation}°</span>`
+          : "";
+        const removeClass = selected ? "remove" : "restore";
+        const removeTitle = selected ? t("excludeFile") : t("restoreFile");
+        const removeIcon = selected ? "−" : "↩";
+        rows.insertAdjacentHTML("beforeend", `
+          <tr class="file-row ${selected ? "" : "excluded"}">
+            <td class="select-cell"><input class="file-checkbox" type="checkbox" data-path="${escapeHtml(file.path)}" ${checked} ${disabled}></td>
+            <td title="${escapeHtml(file.path)}"><div class="file-name-content"><button class="file-link" type="button" data-action="open" data-path="${escapeHtml(file.path)}" title="${escapeHtml(t("openFile"))}">${escapeHtml(file.name)}</button>${rotationBadge}</div></td>
+            <td class="mono">${escapeHtml(file.display_width)}x${escapeHtml(file.display_height)}</td>
+            <td class="mono">${escapeHtml(file.video_codec)}/${escapeHtml(file.audio_codec || "none")}</td>
+            <td class="mono">${escapeHtml(file.fps)}</td>
+            <td class="mono">${escapeHtml(file.duration)}</td>
+            <td class="mono" title="${escapeHtml(file.path)}">${escapeHtml(file.media_created_time || "-")}</td>
+            <td class="mono">${escapeHtml(file.file_size || "-")}</td>
+            <td class="${cls}">${escapeHtml(status)}</td>
+            <td class="actions-cell"><div class="file-actions">
+              <button class="file-action rotate ${manualRotation ? "active" : ""}" type="button" data-action="rotate" data-path="${escapeHtml(file.path)}" title="${escapeHtml(t("rotateClockwise"))}" aria-label="${escapeHtml(t("rotateClockwise"))}" ${disabled}>↻</button>
+              <button class="file-action ${removeClass}" type="button" data-action="toggle" data-path="${escapeHtml(file.path)}" title="${escapeHtml(removeTitle)}" aria-label="${escapeHtml(removeTitle)}" ${disabled}>${removeIcon}</button>
+            </div></td>
+          </tr>`);
       });
-      Object.entries(by).forEach(([orientation, group]) => {
-        const w = Math.max(...group.map(file => file.display_width));
-        const h = Math.max(...group.map(file => file.display_height));
-        rows.insertAdjacentHTML("beforeend", `<tr class="group-row"><td colspan="9">${escapeHtml(t("groupLabel", { orientation, size: `${w}x${h}` }))}</td></tr>`);
-        group.forEach(file => {
-          const action = file.planned_action || "unknown";
-          const cls = action === "copy" || action === "remux" ? "status-ok" : "status-warn";
-          const statusKeys = { copy: "ready", remux: "needsRemux", audio: "needsAudio", transcode: "needsTranscode", skipped: "skipped", excluded: "excluded" };
-          const status = t(statusKeys[action] || "needsTranscode");
-          const checked = state.selectedPaths.has(file.path) ? "checked" : "";
-          rows.insertAdjacentHTML("beforeend", `
-            <tr>
-              <td class="select-cell"><input class="file-checkbox" type="checkbox" data-path="${escapeHtml(file.path)}" ${checked}></td>
-              <td title="${escapeHtml(file.path)}">${escapeHtml(file.name)}</td>
-              <td class="mono">${escapeHtml(file.display_width)}x${escapeHtml(file.display_height)}</td>
-              <td class="mono">${escapeHtml(file.video_codec)}/${escapeHtml(file.audio_codec || "none")}</td>
-              <td class="mono">${escapeHtml(file.fps)}</td>
-              <td class="mono">${escapeHtml(file.duration)}</td>
-              <td class="mono" title="${escapeHtml(file.path)}">${escapeHtml(file.media_created_time || "-")}</td>
-              <td class="mono">${escapeHtml(file.file_size || "-")}</td>
-              <td class="${cls}">${escapeHtml(status)}</td>
-            </tr>`);
-        });
-      });
-      $("summary").textContent = t("summary", { files: files.length, groups: Object.keys(by).length }).toUpperCase();
+      const groups = new Set(files.map(file => file.orientation || "unknown"));
+      $("summary").textContent = t("summary", { files: files.length, groups: groups.size }).toUpperCase();
       rows.querySelectorAll(".file-checkbox").forEach(node => {
         node.addEventListener("change", () => setFileSelected(node.dataset.path, node.checked));
+      });
+      rows.querySelectorAll("[data-action='open']").forEach(node => {
+        node.addEventListener("click", () => openFile(node.dataset.path));
+      });
+      rows.querySelectorAll("[data-action='rotate']").forEach(node => {
+        node.addEventListener("click", () => rotateFile(node.dataset.path));
+      });
+      rows.querySelectorAll("[data-action='toggle']").forEach(node => {
+        node.addEventListener("click", () => setFileSelected(node.dataset.path, !state.selectedPaths.has(node.dataset.path)));
       });
       updateSelectionControls();
       updatePlan();
@@ -1032,7 +1153,8 @@ HTML = r"""<!doctype html>
         audio_codec: $("audioCodec").value,
         fps_policy: $("fpsPolicy").value,
         resolution_policy: $("resolutionPolicy").value,
-        selected_files: Array.from(state.selectedPaths)
+        selected_files: selectedFiles().map(file => file.path),
+        rotation_overrides: rotationPayload()
       };
     }
     function applyPlan(payload) {
@@ -1062,6 +1184,12 @@ HTML = r"""<!doctype html>
           return;
         }
         if (kind === "source") {
+          if (state.scannedInputDir && state.scannedInputDir !== result.path) {
+            state.files = [];
+            state.selectedPaths.clear();
+            state.rotationOverrides.clear();
+            state.plan = null;
+          }
           state.inputDir = result.path;
           await refreshDefaultPaths();
           await scan();
@@ -1078,11 +1206,23 @@ HTML = r"""<!doctype html>
       progress(5);
       log(t("scanning", { path: state.inputDir }));
       try {
+        const preserveState = state.scannedInputDir === state.inputDir;
+        const previousKnownPaths = new Set(state.files.map(file => file.path));
+        const previousSelectedPaths = new Set(state.selectedPaths);
         const payload = await api("/scan", { input_dir: state.inputDir, recursive: $("recursive").checked, sort_by: $("sortBy").value, ...planPayload() });
         state.files = payload.files;
         state.plan = payload.plan || null;
-        state.selectedPaths = new Set(payload.files.map(file => file.path));
-        if ((state.plan && state.plan.selected_count) !== payload.files.length) {
+        state.selectedPaths = new Set(
+          payload.files
+            .filter(file => !preserveState || !previousKnownPaths.has(file.path) || previousSelectedPaths.has(file.path))
+            .map(file => file.path)
+        );
+        const currentPaths = new Set(payload.files.map(file => file.path));
+        state.rotationOverrides = new Map(
+          Array.from(state.rotationOverrides.entries()).filter(([path]) => currentPaths.has(path))
+        );
+        state.scannedInputDir = state.inputDir;
+        if (state.selectedPaths.size !== payload.files.length || state.rotationOverrides.size > 0) {
           applyPlan(await api("/plan", planPayload()));
         } else {
           renderFiles(payload.files);
@@ -1109,6 +1249,11 @@ HTML = r"""<!doctype html>
         updateSelectionControls();
         return;
       }
+      if (state.mode === "fast" && selectedRotationCount() > 0) {
+        log(t("fastRotationUnsupported"));
+        showToast(t("mergeFailedTitle"), t("fastRotationUnsupported"), "error");
+        return;
+      }
       progress(4);
       log(t("startingMerge", { mode: state.mode }));
       try {
@@ -1133,6 +1278,7 @@ HTML = r"""<!doctype html>
           ffprobe_path: configPathValue("ffprobePath"),
           temp_dir: configPathValue("tempDir"),
           selected_files: files.map(file => file.path),
+          rotation_overrides: rotationPayload(),
           recursive: $("recursive").checked,
           overwrite: $("overwrite").checked,
           dry_run: $("dryRun").checked,
@@ -1500,6 +1646,9 @@ def _make_handler(state: GuiState, api_token: str):
             if parsed.path == "/open-url":
                 self._open_url(payload)
                 return
+            if parsed.path == "/open-media":
+                self._open_media(payload)
+                return
             if parsed.path == "/notify":
                 self._notify(payload)
                 return
@@ -1539,6 +1688,25 @@ def _make_handler(state: GuiState, api_token: str):
                 self._send_json({"error": "Unsupported URL"}, HTTPStatus.BAD_REQUEST)
                 return
             webbrowser.open(url)
+            self._send_json({"ok": True})
+
+        def _open_media(self, payload: dict[str, object]) -> None:
+            requested_path = str(payload.get("path") or "")
+            media_file = next(
+                (file for file in state.get_media_files() if str(file.path) == requested_path),
+                None,
+            )
+            if media_file is None:
+                self._send_json({"error": "The requested video is not part of the current scan."}, HTTPStatus.BAD_REQUEST)
+                return
+            if not media_file.path.is_file():
+                self._send_json({"error": "The requested video no longer exists."}, HTTPStatus.NOT_FOUND)
+                return
+            try:
+                _open_media_file(media_file.path)
+            except OSError as exc:
+                self._send_json({"error": str(exc)}, HTTPStatus.INTERNAL_SERVER_ERROR)
+                return
             self._send_json({"ok": True})
 
         def _notify(self, payload: dict[str, object]) -> None:
@@ -1656,6 +1824,7 @@ def _make_handler(state: GuiState, api_token: str):
 def _serialize_files(
     files: list[VideoFile],
     planned_actions: dict[Path, str] | None = None,
+    manual_rotations: dict[Path, int] | None = None,
 ) -> list[dict[str, object]]:
     fast_groups = group_fast(files)
     output = []
@@ -1674,6 +1843,7 @@ def _serialize_files(
                 "duration": _format_duration(file.duration),
                 "media_created_time": _format_media_created_time(file.media_created_at),
                 "orientation": file.orientation.value,
+                "manual_rotation": (manual_rotations or {}).get(file.path, file.manual_rotation),
                 "fast_ready": fast_ready,
                 "planned_action": (planned_actions or {}).get(file.path, "unknown"),
                 **file_size_info,
@@ -1687,19 +1857,31 @@ def _build_gui_plan(
     selected_files: list[VideoFile],
     payload: dict[str, object],
 ) -> dict[str, object]:
+    manual_rotations = _parse_rotation_overrides(payload, all_files)
+    adjusted_all_files = [
+        apply_clockwise_rotation(file, manual_rotations.get(file.path, 0))
+        for file in all_files
+    ]
+    selected_paths = {file.path for file in selected_files}
+    adjusted_selected_files = [
+        file for file in adjusted_all_files if file.path in selected_paths
+    ]
     mode = str(payload.get("mode") or MergeMode.optimal.value)
-    actions = {file.path: "excluded" for file in all_files}
+    actions = {file.path: "excluded" for file in adjusted_all_files}
     targets: list[dict[str, object]] = []
 
     if mode == MergeMode.fast.value:
-        for members in group_fast(selected_files).values():
+        for members in group_fast(adjusted_selected_files).values():
             action = "copy" if len(members) > 1 else "skipped"
             for file in members:
                 actions[file.path] = action
+        for file in adjusted_selected_files:
+            if manual_rotations.get(file.path, 0):
+                actions[file.path] = "rotation_required"
     elif mode == MergeMode.extreme.value:
-        if selected_files:
+        if adjusted_selected_files:
             plan = build_extreme_group_plan(
-                selected_files,
+                adjusted_selected_files,
                 output_format=str(payload.get("output_format") or "mp4"),
                 requested_video_codec=str(payload.get("video_codec") or "") or None,
                 requested_audio_codec=str(payload.get("audio_codec") or "") or None,
@@ -1720,7 +1902,7 @@ def _build_gui_plan(
                 }
             )
     else:
-        groups = split_by_orientation(selected_files)
+        groups = split_by_orientation(adjusted_selected_files)
         for orientation in (Orientation.landscape, Orientation.portrait):
             files = groups.get(orientation, [])
             if not files:
@@ -1748,9 +1930,9 @@ def _build_gui_plan(
                 }
             )
 
-    counts = Counter(actions[file.path] for file in selected_files)
+    counts = Counter(actions[file.path] for file in adjusted_selected_files)
     return {
-        "files": _serialize_files(all_files, actions),
+        "files": _serialize_files(adjusted_all_files, actions, manual_rotations),
         "plan": {
             "mode": mode,
             "copy_count": counts["copy"],
@@ -1758,10 +1940,30 @@ def _build_gui_plan(
             "audio_count": counts["audio"],
             "transcode_count": counts["transcode"],
             "skipped_count": counts["skipped"],
-            "selected_count": len(selected_files),
+            "rotation_blocked_count": counts["rotation_required"],
+            "selected_count": len(adjusted_selected_files),
             "targets": targets,
         },
     }
+
+
+def _parse_rotation_overrides(
+    payload: dict[str, object],
+    files: list[VideoFile],
+) -> dict[Path, int]:
+    raw_overrides = payload.get("rotation_overrides")
+    if not isinstance(raw_overrides, dict):
+        return {}
+    allowed_paths = {str(file.path): file.path for file in files}
+    rotations: dict[Path, int] = {}
+    for raw_path, raw_rotation in raw_overrides.items():
+        path = allowed_paths.get(str(raw_path))
+        if path is None:
+            continue
+        rotation = validate_clockwise_rotation(raw_rotation)
+        if rotation:
+            rotations[path] = rotation
+    return rotations
 
 
 def _file_size_info(path: Path) -> dict[str, object]:
@@ -1822,6 +2024,20 @@ def _detect_gui_ffmpeg_encoders(tools) -> set[str]:
             return encoders
         time.sleep(0.35)
     return encoders
+
+
+def _open_media_file(path: Path) -> None:
+    system = platform.system()
+    if system == "Windows":
+        os.startfile(str(path))  # type: ignore[attr-defined]
+        return
+    command = ["open", str(path)] if system == "Darwin" else ["xdg-open", str(path)]
+    subprocess.Popen(
+        command,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        **subprocess_window_kwargs(),
+    )
 
 
 def _request_notification_permission() -> tuple[bool, str]:
@@ -2040,9 +2256,26 @@ def _write_selected_file_list(payload: dict[str, object]) -> Path | None:
     if not isinstance(selected, list):
         return None
     paths = [str(path) for path in selected if isinstance(path, str) and path]
+    raw_rotations = payload.get("rotation_overrides")
+    rotations: dict[str, int] = {}
+    if isinstance(raw_rotations, dict):
+        for path in paths:
+            if path not in raw_rotations:
+                continue
+            rotation = validate_clockwise_rotation(raw_rotations[path])
+            if rotation:
+                rotations[path] = rotation
+    entries: list[object]
+    if rotations:
+        entries = [
+            {"path": path, "rotate_clockwise": rotations.get(path, 0)}
+            for path in paths
+        ]
+    else:
+        entries = paths
     handle = tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=".json", prefix="videomerge_selected_", delete=False)
     with handle:
-        json.dump(paths, handle, ensure_ascii=False)
+        json.dump(entries, handle, ensure_ascii=False)
     return Path(handle.name)
 
 
