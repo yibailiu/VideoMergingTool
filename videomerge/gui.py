@@ -281,6 +281,32 @@ HTML = r"""<!doctype html>
       text-overflow: ellipsis;
     }
     .mono { font-family: var(--font-mono); }
+    .group-row td {
+      padding: 9px 12px;
+      background: var(--bg-body);
+      color: var(--text-primary);
+      font-size: 11px;
+      font-weight: 800;
+      text-transform: uppercase;
+      letter-spacing: .06em;
+    }
+    .group-label {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+    }
+    .group-marker {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--text-muted);
+    }
+    .group-row.landscape .group-marker { background: var(--accent-blue); }
+    .group-row.portrait .group-marker { background: var(--accent-red); }
+    .group-count {
+      color: var(--text-muted);
+      font-weight: 700;
+    }
     .status-ok { color: var(--accent-green); }
     .status-warn { color: var(--accent-yellow); }
     .status-blocked { color: var(--accent-red); }
@@ -613,7 +639,10 @@ HTML = r"""<!doctype html>
             <button id="selectAllFiles" type="button" data-i18n="selectAllFiles">Select All</button>
             <button id="clearFileSelection" type="button" data-i18n="clearFileSelection">Clear Selection</button>
           </div>
-          <div class="label-micro selection-count" id="selectionCount"></div>
+          <div>
+            <div class="label-micro selection-count" id="selectionCount"></div>
+            <div class="hint" data-i18n="visualGroupingHint">Orientation groups are visual only; merge order still follows the selected global sort.</div>
+          </div>
         </div>
         <div class="table-wrap">
           <table>
@@ -744,6 +773,8 @@ HTML = r"""<!doctype html>
         fastPlan: "Tool will stream-copy compatible groups only. Incompatible files will be skipped.",
         optimalPlan: "Tool will create up to {count} output file(s), separated by landscape and portrait display orientation.",
         extremePlan: "Tool will normalize all files to one display canvas and produce one output file.",
+        orientationLandscape: "Landscape Videos", orientationPortrait: "Portrait Videos", orientationUnknown: "Other Videos", groupCount: "{count} files",
+        visualGroupingHint: "Orientation groups are visual only; merge order still follows the selected global sort.",
         ready: "Ready", needsRemux: "Remux Only", needsAudio: "Audio Only", needsTranscode: "Needs Transcode", rotationRequired: "Rotation Requires Transcode", skipped: "Skipped", excluded: "Not Selected", summary: "{files} files detected - {groups} groups",
         planCounts: "{copy} copy, {remux} remux, {audio} audio only, {transcode} video transcode, {skipped} skipped.",
         openFile: "Play with the system default video player", rotateClockwise: "Rotate clockwise 90° for this merge", excludeFile: "Exclude from this merge without deleting the source", restoreFile: "Restore to this merge", rotatedClockwise: "CW {degrees}°",
@@ -800,6 +831,8 @@ HTML = r"""<!doctype html>
         fastPlan: "工具将仅对兼容分组合并，跳过不兼容文件。",
         optimalPlan: "工具将按横竖屏生成最多 {count} 个输出文件。",
         extremePlan: "工具将把所有文件统一到一个画布并生成一个输出文件。",
+        orientationLandscape: "横向视频", orientationPortrait: "竖向视频", orientationUnknown: "其他视频", groupCount: "{count} 个",
+        visualGroupingHint: "横竖分组仅用于查看；实际合并仍按所选规则统一排序。",
         ready: "就绪", needsRemux: "仅重封装", needsAudio: "仅音频转码", needsTranscode: "需要视频转码", rotationRequired: "旋转需要转码", skipped: "将跳过", excluded: "未选中", summary: "检测到 {files} 个文件 - {groups} 个分组",
         planCounts: "直通 {copy} 个，重封装 {remux} 个，仅音频 {audio} 个，视频转码 {transcode} 个，跳过 {skipped} 个。",
         openFile: "使用系统默认视频播放器播放", rotateClockwise: "本次合并顺时针旋转 90°", excludeFile: "从本次合并排除，不删除源文件", restoreFile: "恢复到本次合并", rotatedClockwise: "顺时针 {degrees}°",
@@ -1007,11 +1040,11 @@ HTML = r"""<!doctype html>
         "'": "&#39;"
       })[char]);
     }
-    function selectedFiles() {
+    function mergeOrderedFiles() {
       return state.files.filter(file => state.selectedPaths.has(file.path));
     }
     function selectedRotationCount() {
-      return selectedFiles().filter(file => (state.rotationOverrides.get(file.path) || 0) !== 0).length;
+      return mergeOrderedFiles().filter(file => (state.rotationOverrides.get(file.path) || 0) !== 0).length;
     }
     function rotationPayload() {
       return Object.fromEntries(
@@ -1020,7 +1053,7 @@ HTML = r"""<!doctype html>
     }
     function updateSelectionControls() {
       const total = state.files.length;
-      const selected = selectedFiles().length;
+      const selected = mergeOrderedFiles().length;
       $("selectionCount").textContent = total ? t("selectedCount", { selected, total }) : "";
       $("selectAllFiles").disabled = state.running || total === 0 || selected === total;
       $("clearFileSelection").disabled = state.running || selected === 0;
@@ -1063,7 +1096,7 @@ HTML = r"""<!doctype html>
         $("planText").textContent = t("selectFolderPlan");
         return;
       }
-      const files = selectedFiles();
+      const files = mergeOrderedFiles();
       if (!files.length) {
         $("planText").textContent = t("noSelectedFiles");
         return;
@@ -1094,42 +1127,62 @@ HTML = r"""<!doctype html>
     function renderFiles(files) {
       const rows = $("fileRows");
       rows.innerHTML = "";
+      const groupedFiles = { landscape: [], portrait: [], unknown: [] };
       files.forEach(file => {
-        const action = file.planned_action || "unknown";
-        const cls = action === "copy" || action === "remux"
-          ? "status-ok"
-          : action === "rotation_required" ? "status-blocked" : "status-warn";
-        const statusKeys = { copy: "ready", remux: "needsRemux", audio: "needsAudio", transcode: "needsTranscode", rotation_required: "rotationRequired", skipped: "skipped", excluded: "excluded" };
-        const status = t(statusKeys[action] || "needsTranscode");
-        const selected = state.selectedPaths.has(file.path);
-        const checked = selected ? "checked" : "";
-        const disabled = state.running ? "disabled" : "";
-        const manualRotation = state.rotationOverrides.get(file.path) || 0;
-        const rotationBadge = manualRotation
-          ? `<span class="rotation-badge" title="${escapeHtml(t("rotatedClockwise", { degrees: manualRotation }))}">↻${manualRotation}°</span>`
-          : "";
-        const removeClass = selected ? "remove" : "restore";
-        const removeTitle = selected ? t("excludeFile") : t("restoreFile");
-        const removeIcon = selected ? "−" : "↩";
-        rows.insertAdjacentHTML("beforeend", `
-          <tr class="file-row ${selected ? "" : "excluded"}">
-            <td class="select-cell"><input class="file-checkbox" type="checkbox" data-path="${escapeHtml(file.path)}" ${checked} ${disabled}></td>
-            <td title="${escapeHtml(file.path)}"><div class="file-name-content"><button class="file-link" type="button" data-action="open" data-path="${escapeHtml(file.path)}" title="${escapeHtml(t("openFile"))}">${escapeHtml(file.name)}</button>${rotationBadge}</div></td>
-            <td class="mono">${escapeHtml(file.display_width)}x${escapeHtml(file.display_height)}</td>
-            <td class="mono">${escapeHtml(file.video_codec)}/${escapeHtml(file.audio_codec || "none")}</td>
-            <td class="mono">${escapeHtml(file.fps)}</td>
-            <td class="mono">${escapeHtml(file.duration)}</td>
-            <td class="mono" title="${escapeHtml(file.path)}">${escapeHtml(file.media_created_time || "-")}</td>
-            <td class="mono">${escapeHtml(file.file_size || "-")}</td>
-            <td class="${cls}">${escapeHtml(status)}</td>
-            <td class="actions-cell"><div class="file-actions">
-              <button class="file-action rotate ${manualRotation ? "active" : ""}" type="button" data-action="rotate" data-path="${escapeHtml(file.path)}" title="${escapeHtml(t("rotateClockwise"))}" aria-label="${escapeHtml(t("rotateClockwise"))}" ${disabled}>↻</button>
-              <button class="file-action ${removeClass}" type="button" data-action="toggle" data-path="${escapeHtml(file.path)}" title="${escapeHtml(removeTitle)}" aria-label="${escapeHtml(removeTitle)}" ${disabled}>${removeIcon}</button>
-            </div></td>
-          </tr>`);
+        const groupKey = file.orientation === "portrait"
+          ? "portrait"
+          : file.orientation === "unknown" ? "unknown" : "landscape";
+        groupedFiles[groupKey].push(file);
       });
-      const groups = new Set(files.map(file => file.orientation || "unknown"));
-      $("summary").textContent = t("summary", { files: files.length, groups: groups.size }).toUpperCase();
+      const groupDefinitions = [
+        ["landscape", "orientationLandscape"],
+        ["portrait", "orientationPortrait"],
+        ["unknown", "orientationUnknown"]
+      ];
+      groupDefinitions.forEach(([groupKey, labelKey]) => {
+        const group = groupedFiles[groupKey];
+        if (!group.length) return;
+        rows.insertAdjacentHTML("beforeend", `
+          <tr class="group-row ${groupKey}">
+            <td colspan="10"><span class="group-label"><span class="group-marker"></span>${escapeHtml(t(labelKey))}<span class="group-count">${escapeHtml(t("groupCount", { count: group.length }))}</span></span></td>
+          </tr>`);
+        group.forEach(file => {
+          const action = file.planned_action || "unknown";
+          const cls = action === "copy" || action === "remux"
+            ? "status-ok"
+            : action === "rotation_required" ? "status-blocked" : "status-warn";
+          const statusKeys = { copy: "ready", remux: "needsRemux", audio: "needsAudio", transcode: "needsTranscode", rotation_required: "rotationRequired", skipped: "skipped", excluded: "excluded" };
+          const status = t(statusKeys[action] || "needsTranscode");
+          const selected = state.selectedPaths.has(file.path);
+          const checked = selected ? "checked" : "";
+          const disabled = state.running ? "disabled" : "";
+          const manualRotation = state.rotationOverrides.get(file.path) || 0;
+          const rotationBadge = manualRotation
+            ? `<span class="rotation-badge" title="${escapeHtml(t("rotatedClockwise", { degrees: manualRotation }))}">↻${manualRotation}°</span>`
+            : "";
+          const removeClass = selected ? "remove" : "restore";
+          const removeTitle = selected ? t("excludeFile") : t("restoreFile");
+          const removeIcon = selected ? "−" : "↩";
+          rows.insertAdjacentHTML("beforeend", `
+            <tr class="file-row ${selected ? "" : "excluded"}">
+              <td class="select-cell"><input class="file-checkbox" type="checkbox" data-path="${escapeHtml(file.path)}" ${checked} ${disabled}></td>
+              <td title="${escapeHtml(file.path)}"><div class="file-name-content"><button class="file-link" type="button" data-action="open" data-path="${escapeHtml(file.path)}" title="${escapeHtml(t("openFile"))}">${escapeHtml(file.name)}</button>${rotationBadge}</div></td>
+              <td class="mono">${escapeHtml(file.display_width)}x${escapeHtml(file.display_height)}</td>
+              <td class="mono">${escapeHtml(file.video_codec)}/${escapeHtml(file.audio_codec || "none")}</td>
+              <td class="mono">${escapeHtml(file.fps)}</td>
+              <td class="mono">${escapeHtml(file.duration)}</td>
+              <td class="mono" title="${escapeHtml(file.path)}">${escapeHtml(file.media_created_time || "-")}</td>
+              <td class="mono">${escapeHtml(file.file_size || "-")}</td>
+              <td class="${cls}">${escapeHtml(status)}</td>
+              <td class="actions-cell"><div class="file-actions">
+                <button class="file-action rotate ${manualRotation ? "active" : ""}" type="button" data-action="rotate" data-path="${escapeHtml(file.path)}" title="${escapeHtml(t("rotateClockwise"))}" aria-label="${escapeHtml(t("rotateClockwise"))}" ${disabled}>↻</button>
+                <button class="file-action ${removeClass}" type="button" data-action="toggle" data-path="${escapeHtml(file.path)}" title="${escapeHtml(removeTitle)}" aria-label="${escapeHtml(removeTitle)}" ${disabled}>${removeIcon}</button>
+              </div></td>
+            </tr>`);
+        });
+      });
+      const groupCount = groupDefinitions.filter(([groupKey]) => groupedFiles[groupKey].length > 0).length;
+      $("summary").textContent = t("summary", { files: files.length, groups: groupCount }).toUpperCase();
       rows.querySelectorAll(".file-checkbox").forEach(node => {
         node.addEventListener("change", () => setFileSelected(node.dataset.path, node.checked));
       });
@@ -1153,7 +1206,7 @@ HTML = r"""<!doctype html>
         audio_codec: $("audioCodec").value,
         fps_policy: $("fpsPolicy").value,
         resolution_policy: $("resolutionPolicy").value,
-        selected_files: selectedFiles().map(file => file.path),
+        selected_files: mergeOrderedFiles().map(file => file.path),
         rotation_overrides: rotationPayload()
       };
     }
@@ -1243,7 +1296,7 @@ HTML = r"""<!doctype html>
         await selectFolder("source");
         if (!state.inputDir) return;
       }
-      const files = selectedFiles();
+      const files = mergeOrderedFiles();
       if (!files.length) {
         log(t("noSelectedFiles"));
         updateSelectionControls();

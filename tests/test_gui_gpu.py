@@ -7,6 +7,7 @@ from pathlib import Path
 from unittest.mock import Mock, patch
 
 from videomerge.gui import (
+    HTML,
     _build_gui_plan,
     _build_merge_command,
     _detect_gui_ffmpeg_encoders,
@@ -18,6 +19,18 @@ from videomerge.models import Orientation, VideoFile
 
 
 class GuiGpuTests(unittest.TestCase):
+    def test_gui_template_keeps_orientation_group_headers(self) -> None:
+        self.assertIn('class="group-row ${groupKey}"', HTML)
+        self.assertIn('orientationLandscape: "Landscape Videos"', HTML)
+        self.assertIn('orientationPortrait: "Portrait Videos"', HTML)
+        self.assertIn("横竖分组仅用于查看；实际合并仍按所选规则统一排序。", HTML)
+        self.assertIn(
+            "function mergeOrderedFiles() {\n"
+            "      return state.files.filter(file => state.selectedPaths.has(file.path));\n"
+            "    }",
+            HTML,
+        )
+
     def test_gui_command_includes_gpu_option(self) -> None:
         command = _build_merge_command({"input_dir": "/tmp/in", "gpu": "auto"})
 
