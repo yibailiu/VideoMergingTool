@@ -7,7 +7,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from videomerge.models import Orientation, ToolPaths
-from videomerge.probe import probe_file
+from videomerge.probe import FFPROBE_ENTRIES, probe_file
 
 
 class ProbeEncodingTests(unittest.TestCase):
@@ -23,6 +23,8 @@ class ProbeEncodingTests(unittest.TestCase):
         def fake_run(args, **kwargs):  # type: ignore[no-untyped-def]
             self.assertEqual(kwargs["encoding"], "utf-8")
             self.assertEqual(kwargs["errors"], "replace")
+            self.assertEqual(args[args.index("-show_entries") + 1], FFPROBE_ENTRIES)
+            self.assertNotIn("-show_streams", args)
             return subprocess.CompletedProcess(args=args, returncode=0, stdout=payload, stderr="")
 
         tools = ToolPaths(ffmpeg=Path("ffmpeg"), ffprobe=Path("ffprobe"))

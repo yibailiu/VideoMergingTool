@@ -7,7 +7,7 @@ from pathlib import Path
 from .errors import CommandError, ProbeError
 from .models import MergeMode, MergeResult, ToolPaths
 from .probe import probe_file
-from .utils import run_command, write_concat_list
+from .utils import FFMPEG_RUNTIME_ARGS, run_command, write_concat_list
 
 
 def concat_copy(
@@ -35,7 +35,7 @@ def concat_copy(
         args = [
             tools.ffmpeg,
             "-y" if overwrite else "-n",
-            "-hide_banner",
+            *FFMPEG_RUNTIME_ARGS,
             "-f",
             "concat",
             "-safe",

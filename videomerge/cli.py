@@ -104,7 +104,12 @@ def merge(
             paths, manual_rotations = _load_selected_video_manifest(selected_files, input_dir)
             logger.info("Loaded %d selected video file(s) from %s", len(paths), selected_files)
         else:
-            paths = scan_video_files(input_dir, recursive=recursive, sort_by=sort_by)
+            paths = scan_video_files(
+                input_dir,
+                recursive=recursive,
+                sort_by=sort_by,
+                excluded_dirs=(out_dir,),
+            )
             logger.info("Scanned %d candidate video files from %s using sort=%s", len(paths), input_dir, sort_by)
         if not paths:
             raise VideoMergeError("No recognized video files found.")

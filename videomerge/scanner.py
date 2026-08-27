@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import os
 import re
 from pathlib import Path
+from typing import Iterable
 
 from .models import VideoFile
 
@@ -30,17 +32,48 @@ SORT_OPTIONS = {
 }
 
 
-def scan_video_files(input_dir: Path, recursive: bool, sort_by: str = "name-natural-asc") -> list[Path]:
+def scan_video_files(
+    input_dir: Path,
+    recursive: bool,
+    sort_by: str = "name-natural-asc",
+    excluded_dirs: Iterable[Path] = (),
+) -> list[Path]:
     pattern = "**/*" if recursive else "*"
+    root = Path(os.path.abspath(input_dir))
+    excluded_list: list[Path] = []
+    for path in excluded_dirs:
+        candidate = Path(os.path.abspath(path.expanduser()))
+        try:
+            candidate.relative_to(root)
+        except ValueError:
+            continue
+        if candidate != root:
+            excluded_list.append(candidate)
+    excluded = tuple(excluded_list)
     files = [
         path
         for path in input_dir.glob(pattern)
-        if path.is_file() and path.suffix.lower() in VIDEO_EXTENSIONS
+        if path.is_file()
+        and path.suffix.lower() in VIDEO_EXTENSIONS
+        and not _is_below_any(path, excluded)
     ]
-    return _sort_video_files(files, input_dir, sort_by)
+    return sort_video_paths(files, input_dir, sort_by)
 
 
-def _sort_video_files(files: list[Path], input_dir: Path, sort_by: str) -> list[Path]:
+def _is_below_any(path: Path, directories: tuple[Path, ...]) -> bool:
+    if not directories:
+        return False
+    resolved = Path(os.path.abspath(path))
+    for directory in directories:
+        try:
+            resolved.relative_to(directory)
+            return True
+        except ValueError:
+            continue
+    return False
+
+
+def sort_video_paths(files: list[Path], input_dir: Path, sort_by: str) -> list[Path]:
     if sort_by not in SORT_OPTIONS:
         raise ValueError(f"Unsupported sort option: {sort_by}")
 

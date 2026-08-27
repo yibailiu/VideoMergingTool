@@ -13,6 +13,16 @@ from .models import Orientation, ToolPaths, VideoFile
 from .utils import parse_fraction, subprocess_window_kwargs
 
 
+FFPROBE_ENTRIES = (
+    "format=format_name,duration,bit_rate:"
+    "format_tags=creation_time,com.apple.quicktime.creationdate:"
+    "stream=codec_type,codec_name,width,height,avg_frame_rate,r_frame_rate,pix_fmt,"
+    "duration,bit_rate,sample_rate,channels,time_base:"
+    "stream_tags=rotate,rotation,creation_time,com.apple.quicktime.creationdate:"
+    "stream_side_data=rotation"
+)
+
+
 def probe_file(path: Path, tools: ToolPaths, logger: logging.Logger) -> VideoFile:
     args = [
         str(tools.ffprobe),
@@ -20,8 +30,8 @@ def probe_file(path: Path, tools: ToolPaths, logger: logging.Logger) -> VideoFil
         "error",
         "-print_format",
         "json",
-        "-show_format",
-        "-show_streams",
+        "-show_entries",
+        FFPROBE_ENTRIES,
         str(path),
     ]
     process = subprocess.run(
@@ -128,7 +138,7 @@ def probe_files(paths: list[Path], tools: ToolPaths, logger: logging.Logger) -> 
     for path, file in zip(paths, ordered_results):
         if file is not None:
             results.append(file)
-            logger.info(
+            logger.debug(
                 "Media: %s | %s %dx%d display=%dx%d fps=%s pix=%s audio=%s/%sHz/%sch bitrate=%dk/%dk duration=%.2fs rotation=%d",
                 path.name,
                 file.video_codec,

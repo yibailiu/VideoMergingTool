@@ -29,7 +29,7 @@ from .gpu import detect_ffmpeg_encoders
 from .models import MergeMode, Orientation, VideoFile
 from .planning import build_extreme_group_plan, build_optimal_group_plan
 from .probe import probe_files
-from .scanner import scan_video_files, sort_probed_files
+from .scanner import VIDEO_EXTENSIONS, scan_video_files, sort_probed_files, sort_video_paths
 from .utils import subprocess_window_kwargs
 from . import __version__
 
@@ -630,6 +630,7 @@ HTML = r"""<!doctype html>
         </div>
         <div class="toolbar">
           <button id="selectSource" data-i18n="selectFolder">Select Folder</button>
+          <button id="selectFiles" data-i18n="selectFiles">Select Files</button>
           <button class="btn-icon" id="refresh" title="Refresh">↻</button>
         </div>
       </div>
@@ -753,7 +754,7 @@ HTML = r"""<!doctype html>
     const messages = {
       en: {
         ffmpegNotChecked: "! FFmpeg Not Checked", ffmpegChecking: "... Checking FFmpeg", ffmpegInstalled: "✓ FFmpeg Installed", ffmpegMissing: "! FFmpeg Missing", refreshFfmpeg: "Refresh FFmpeg check",
-        sourceFiles: "Source Files", noFolderSelected: "No folder selected", selectFolder: "Select Folder", filename: "Filename", resolution: "Resolution", codec: "Codec", duration: "Dur", mediaCreatedTime: "Media Created", fileSize: "Size", status: "Status", actions: "Actions",
+        sourceFiles: "Source Files", noFolderSelected: "No folder or files selected", selectFolder: "Select Folder", selectFiles: "Select Files", filename: "Filename", resolution: "Resolution", codec: "Codec", duration: "Dur", mediaCreatedTime: "Media Created", fileSize: "Size", status: "Status", actions: "Actions",
         processConsole: "Process Console", configuration: "Configuration", mergeStrategy: "Merge Strategy", outputSettings: "Output Settings", browse: "Browse",
         fastMerge: "Fast Merge", optimalMerge: "Optimal Merge", extremeMerge: "Extreme Merge", lossless: "Lossless", smart: "Smart", bruteForce: "Brute Force",
         fastDesc: "Stream copy only. Skips incompatible groups.", optimalDesc: "Groups by orientation and transcodes when needed.", extremeDesc: "Normalizes all files into one output.",
@@ -780,7 +781,7 @@ HTML = r"""<!doctype html>
         openFile: "Play with the system default video player", rotateClockwise: "Rotate clockwise 90° for this merge", excludeFile: "Exclude from this merge without deleting the source", restoreFile: "Restore to this merge", rotatedClockwise: "CW {degrees}°",
         fastRotationUnsupported: "Manual rotation requires Optimal or Extreme mode. Fast mode only performs stream copy.",
         openFileFailed: "Could not open the video with the system default player.",
-        folderCancelled: "Folder selection was cancelled or is unavailable on this system.", scanning: "Scanning {path}", filesAnalyzed: "{count} files analyzed.",
+        folderCancelled: "Folder selection was cancelled or is unavailable on this system.", filesCancelled: "File selection was cancelled or contained no supported videos.", scanning: "Analyzing source videos", filesAnalyzed: "{count} files analyzed.",
         startingMerge: "Starting {mode} merge", stoppingMerge: "Stopping current merge task...", selectBegin: "Select a source folder to begin.",
         mergeCompletedTitle: "Merge Completed", mergeCompletedBody: "Your video merge task has finished.", mergeFailedTitle: "Merge Failed", mergeFailedBody: "The merge task ended with an error. Check the process console for details.",
         mergeStoppedTitle: "Merge Stopped", mergeStoppedBody: "The merge task was stopped by the user.",
@@ -811,7 +812,7 @@ HTML = r"""<!doctype html>
       },
       zh: {
         ffmpegNotChecked: "! FFmpeg 未检查", ffmpegChecking: "... 正在检查 FFmpeg", ffmpegInstalled: "✓ FFmpeg 已安装", ffmpegMissing: "! FFmpeg 缺失", refreshFfmpeg: "重新检查 FFmpeg",
-        sourceFiles: "源文件", noFolderSelected: "未选择文件夹", selectFolder: "选择文件夹", filename: "文件名", resolution: "分辨率", codec: "编码", duration: "时长", mediaCreatedTime: "创建媒体日期", fileSize: "大小", status: "状态", actions: "操作",
+        sourceFiles: "源文件", noFolderSelected: "未选择文件夹或视频", selectFolder: "选择文件夹", selectFiles: "选择文件", filename: "文件名", resolution: "分辨率", codec: "编码", duration: "时长", mediaCreatedTime: "创建媒体日期", fileSize: "大小", status: "状态", actions: "操作",
         processConsole: "处理控制台", configuration: "配置", mergeStrategy: "合并策略", outputSettings: "输出设置", browse: "浏览",
         fastMerge: "快速合并", optimalMerge: "智能合并", extremeMerge: "强制合并", lossless: "无损", smart: "智能", bruteForce: "强制",
         fastDesc: "仅使用流复制，跳过不兼容分组。", optimalDesc: "按横竖屏分组，必要时转码。", extremeDesc: "统一所有文件到一个输出。",
@@ -838,7 +839,7 @@ HTML = r"""<!doctype html>
         openFile: "使用系统默认视频播放器播放", rotateClockwise: "本次合并顺时针旋转 90°", excludeFile: "从本次合并排除，不删除源文件", restoreFile: "恢复到本次合并", rotatedClockwise: "顺时针 {degrees}°",
         fastRotationUnsupported: "人工旋转需要使用智能合并或强制合并；快速合并只执行流复制。",
         openFileFailed: "无法使用系统默认播放器打开视频。",
-        folderCancelled: "文件夹选择已取消，或当前系统不可用。", scanning: "正在扫描 {path}", filesAnalyzed: "已分析 {count} 个文件。",
+        folderCancelled: "文件夹选择已取消，或当前系统不可用。", filesCancelled: "文件选择已取消，或未包含支持的视频。", scanning: "正在分析源视频", filesAnalyzed: "已分析 {count} 个文件。",
         startingMerge: "开始 {mode} 合并", stoppingMerge: "正在停止当前合并任务...", selectBegin: "请选择源文件夹开始。",
         mergeCompletedTitle: "合并完成", mergeCompletedBody: "视频合并任务已完成。", mergeFailedTitle: "合并失败", mergeFailedBody: "合并任务发生错误，请查看处理控制台。", mergeStoppedTitle: "合并已停止", mergeStoppedBody: "用户已手动停止当前合并任务。",
         tipName: "对应 --name。留空时根据文件夹、模式和分辨率自动命名。",
@@ -871,13 +872,17 @@ HTML = r"""<!doctype html>
       mode: "optimal",
       inputDir: "",
       scannedInputDir: "",
+      sourceFiles: [],
       files: [],
       selectedPaths: new Set(),
       rotationOverrides: new Map(),
+      visualOrientations: new Map(),
       plan: null,
       running: false,
       statusTimer: null,
       mergeWasRunning: false,
+      logCursor: 0,
+      runLogs: [],
       lang: "en",
       deps: { status: "notChecked", message: "" },
       defaults: {}
@@ -916,7 +921,11 @@ HTML = r"""<!doctype html>
     }
     function log(message) {
       const stamp = new Date().toTimeString().slice(0, 8);
-      $("logs").textContent += `[${stamp}] ${message}\n`;
+      appendLogLines([`[${stamp}] ${message}`]);
+    }
+    function appendLogLines(lines) {
+      if (!lines || !lines.length) return;
+      $("logs").append(document.createTextNode(`${lines.join("\n")}\n`));
       $("logs").scrollTop = $("logs").scrollHeight;
     }
     function progress(value) {
@@ -1129,9 +1138,10 @@ HTML = r"""<!doctype html>
       rows.innerHTML = "";
       const groupedFiles = { landscape: [], portrait: [], unknown: [] };
       files.forEach(file => {
-        const groupKey = file.orientation === "portrait"
+        const visualOrientation = state.visualOrientations.get(file.path) || file.orientation;
+        const groupKey = visualOrientation === "portrait"
           ? "portrait"
-          : file.orientation === "unknown" ? "unknown" : "landscape";
+          : visualOrientation === "unknown" ? "unknown" : "landscape";
         groupedFiles[groupKey].push(file);
       });
       const groupDefinitions = [
@@ -1215,6 +1225,18 @@ HTML = r"""<!doctype html>
       state.plan = payload.plan || null;
       renderFiles(state.files);
     }
+    function syncVisualOrientations(files, reset = false) {
+      if (reset) state.visualOrientations.clear();
+      const currentPaths = new Set(files.map(file => file.path));
+      Array.from(state.visualOrientations.keys()).forEach(path => {
+        if (!currentPaths.has(path)) state.visualOrientations.delete(path);
+      });
+      files.forEach(file => {
+        if (!state.visualOrientations.has(file.path)) {
+          state.visualOrientations.set(file.path, file.orientation);
+        }
+      });
+    }
     let planTimer = null;
     let planVersion = 0;
     function refreshPlan() {
@@ -1241,8 +1263,10 @@ HTML = r"""<!doctype html>
             state.files = [];
             state.selectedPaths.clear();
             state.rotationOverrides.clear();
+            state.visualOrientations.clear();
             state.plan = null;
           }
+          state.sourceFiles = [];
           state.inputDir = result.path;
           await refreshDefaultPaths();
           await scan();
@@ -1254,15 +1278,42 @@ HTML = r"""<!doctype html>
         }
       } catch (error) { log(`ERROR: ${error.message}`); }
     }
+    async function selectVideoFiles() {
+      try {
+        const result = await api("/pick-files");
+        if (!result.paths || !result.paths.length) {
+          log(t("filesCancelled"));
+          return;
+        }
+        state.files = [];
+        state.selectedPaths.clear();
+        state.rotationOverrides.clear();
+        state.visualOrientations.clear();
+        state.plan = null;
+        state.scannedInputDir = "";
+        state.sourceFiles = result.paths;
+        state.inputDir = result.input_dir;
+        await refreshDefaultPaths();
+        await scan();
+      } catch (error) { log(`ERROR: ${error.message}`); }
+    }
     async function scan() {
       if (!state.inputDir) return selectFolder("source");
       progress(5);
-      log(t("scanning", { path: state.inputDir }));
+      log(t("scanning"));
       try {
         const preserveState = state.scannedInputDir === state.inputDir;
         const previousKnownPaths = new Set(state.files.map(file => file.path));
         const previousSelectedPaths = new Set(state.selectedPaths);
-        const payload = await api("/scan", { input_dir: state.inputDir, recursive: $("recursive").checked, sort_by: $("sortBy").value, ...planPayload() });
+        const payload = await api("/scan", {
+          input_dir: state.inputDir,
+          source_files: state.sourceFiles,
+          output_dir: $("outputDir").value.trim(),
+          recursive: $("recursive").checked,
+          sort_by: $("sortBy").value,
+          ...planPayload()
+        });
+        syncVisualOrientations(payload.files, !preserveState);
         state.files = payload.files;
         state.plan = payload.plan || null;
         state.selectedPaths = new Set(
@@ -1340,12 +1391,15 @@ HTML = r"""<!doctype html>
         });
         setRunning(true);
         state.mergeWasRunning = true;
-        log(`Command: ${payload.command.join(" ")}`);
+        state.logCursor = 0;
+        state.runLogs = [];
+        $("logs").textContent = "";
         if (state.statusTimer) clearInterval(state.statusTimer);
         state.statusTimer = setInterval(async () => {
-          const status = await api("/status");
-          $("logs").textContent = status.logs.join("\n") + (status.logs.length ? "\n" : "");
-          $("logs").scrollTop = $("logs").scrollHeight;
+          const status = await api(`/status?after=${state.logCursor}`);
+          appendLogLines(status.logs || []);
+          state.runLogs.push(...(status.logs || []));
+          state.logCursor = status.log_cursor || state.logCursor;
           progress(status.progress);
           setRunning(status.running);
           if (!status.running) {
@@ -1353,7 +1407,7 @@ HTML = r"""<!doctype html>
             state.statusTimer = null;
             if (state.mergeWasRunning) {
               state.mergeWasRunning = false;
-              notifyMergeFinished(status.logs || []);
+              notifyMergeFinished(state.runLogs);
             }
           }
         }, 500);
@@ -1436,6 +1490,7 @@ HTML = r"""<!doctype html>
       refreshPlan();
     }));
     $("selectSource").addEventListener("click", () => selectFolder("source"));
+    $("selectFiles").addEventListener("click", selectVideoFiles);
     $("selectOutput").addEventListener("click", () => selectFolder("output"));
     $("selectTemp").addEventListener("click", () => selectFolder("temp"));
     $("selectAllFiles").addEventListener("click", selectAllFiles);
@@ -1535,15 +1590,20 @@ class GuiState:
         stamp = time.strftime("%H:%M:%S")
         with self.lock:
             self.logs.append(f"[{stamp}] {message}")
-            self.logs = self.logs[-400:]
 
     def set_progress(self, value: int) -> None:
         with self.lock:
             self.progress = max(0, min(100, value))
 
-    def snapshot(self) -> dict[str, object]:
+    def snapshot(self, after: int = 0) -> dict[str, object]:
         with self.lock:
-            return {"logs": list(self.logs), "progress": self.progress, "running": self.running}
+            cursor = max(0, min(after, len(self.logs)))
+            return {
+                "logs": list(self.logs[cursor:]),
+                "log_cursor": len(self.logs),
+                "progress": self.progress,
+                "running": self.running,
+            }
 
     def set_media_files(self, files: list[VideoFile]) -> None:
         with self.lock:
@@ -1658,11 +1718,25 @@ def _make_handler(state: GuiState, api_token: str):
                 kind = parse_qs(parsed.query).get("kind", ["source"])[0]
                 self._send_json({"path": _pick_folder(kind)})
                 return
+            if parsed.path == "/pick-files":
+                paths = _pick_video_files()
+                self._send_json(
+                    {
+                        "paths": paths,
+                        "input_dir": _common_input_dir(paths) if paths else "",
+                    }
+                )
+                return
             if parsed.path == "/deps":
                 self._deps()
                 return
             if parsed.path == "/status":
-                self._send_json(state.snapshot())
+                after_value = parse_qs(parsed.query).get("after", ["0"])[0]
+                try:
+                    after = int(after_value)
+                except ValueError:
+                    after = 0
+                self._send_json(state.snapshot(after))
                 return
             if parsed.path == "/config":
                 self._send_json(_load_gui_config())
@@ -1781,17 +1855,25 @@ def _make_handler(state: GuiState, api_token: str):
                 input_dir = Path(str(payload["input_dir"]))
                 if not input_dir.is_dir():
                     raise ValueError(f"Selected path is not a folder: {input_dir}")
-                paths = scan_video_files(
-                    input_dir,
-                    bool(payload.get("recursive", True)),
-                    str(payload.get("sort_by") or "name-natural-asc"),
-                )
+                output_value = str(payload.get("output_dir") or "").strip()
+                output_dir = Path(output_value).expanduser() if output_value else input_dir / "merged"
+                sort_by = str(payload.get("sort_by") or "name-natural-asc")
+                source_values = payload.get("source_files")
+                if isinstance(source_values, list) and source_values:
+                    paths = _validate_selected_source_files(source_values, input_dir, sort_by)
+                else:
+                    paths = scan_video_files(
+                        input_dir,
+                        bool(payload.get("recursive", True)),
+                        sort_by,
+                        excluded_dirs=(output_dir,),
+                    )
                 state.set_progress(25)
                 media_files, failures = probe_files(paths, tools, logger)
                 media_files = sort_probed_files(
                     media_files,
                     input_dir,
-                    str(payload.get("sort_by") or "name-natural-asc"),
+                    sort_by,
                 )
                 if failures:
                     state.log(f"{len(failures)} file(s) could not be analyzed.")
@@ -2349,13 +2431,14 @@ def _run_merge(command: list[str], state: GuiState) -> None:
         assert process.stdout is not None
         for line in process.stdout:
             stripped = line.rstrip()
-            state.log(stripped)
             temp_match = re.search(r"(?:Preprocessing|Concat) temp directory:\s+(.+)$", stripped)
             if temp_match:
                 state.record_temp_path(Path(temp_match.group(1).strip()))
             progress_match = re.search(r"Progress:\s+(\d+)/(\d+)\s+\((\d+)%\)", stripped)
             if progress_match:
                 state.set_progress(int(progress_match.group(3)))
+            if _is_useful_process_log(stripped):
+                state.log(stripped)
         code = process.wait()
         was_cancelled = state.finish_process()
         if was_cancelled:
@@ -2371,6 +2454,16 @@ def _run_merge(command: list[str], state: GuiState) -> None:
     finally:
         _cleanup_selected_file_list(command)
         state.finish_process()
+
+
+def _is_useful_process_log(message: str) -> bool:
+    if not message:
+        return False
+    if re.search(r"Progress:\s+\d+/\d+\s+\(\d+%\)", message):
+        return False
+    if re.search(r"(?:Preprocessing|Concat) temp directory:\s+", message):
+        return False
+    return True
 
 
 def _cleanup_selected_file_list(command: list[str]) -> None:
@@ -2465,6 +2558,167 @@ def _pick_folder(kind: str) -> str:
     selected = _pick_folder_tk(title)
     _remember_picker_dir(kind, selected)
     return selected
+
+
+def _pick_video_files() -> list[str]:
+    title = "Select one or more source video files"
+    initial_dir = _last_picker_dir("source")
+    if platform.system() == "Darwin":
+        selected = _pick_video_files_macos(title)
+    elif platform.system() == "Windows":
+        selected = _pick_video_files_windows(title, initial_dir)
+        if selected is None:
+            selected = _pick_video_files_tk(title, initial_dir)
+    else:
+        selected = _pick_video_files_tk(title, initial_dir)
+    normalized = _normalize_picked_video_files(selected or [])
+    if normalized:
+        _remember_picker_dir("source", normalized[0])
+    return normalized
+
+
+def _normalize_picked_video_files(values: list[str]) -> list[str]:
+    paths: list[str] = []
+    seen: set[Path] = set()
+    for value in values:
+        if not value:
+            continue
+        path = Path(value.strip().strip('"')).expanduser()
+        try:
+            resolved = path.resolve()
+        except OSError:
+            continue
+        if resolved in seen or not resolved.is_file() or resolved.suffix.lower() not in VIDEO_EXTENSIONS:
+            continue
+        seen.add(resolved)
+        paths.append(str(resolved))
+    return paths
+
+
+def _common_input_dir(paths: list[str]) -> str:
+    if not paths:
+        return ""
+    try:
+        common = Path(os.path.commonpath(paths))
+    except ValueError:
+        return str(Path(paths[0]).parent)
+    return str(common.parent if common.is_file() else common)
+
+
+def _validate_selected_source_files(
+    values: list[object],
+    input_dir: Path,
+    sort_by: str,
+) -> list[Path]:
+    root = input_dir.expanduser().resolve()
+    paths: list[Path] = []
+    seen: set[Path] = set()
+    for value in values:
+        if not isinstance(value, str) or not value:
+            continue
+        path = Path(value).expanduser().resolve()
+        try:
+            path.relative_to(root)
+        except ValueError as exc:
+            raise ValueError(f"Selected source file is outside the source root: {path}") from exc
+        if path in seen:
+            continue
+        if not path.is_file() or path.suffix.lower() not in VIDEO_EXTENSIONS:
+            raise ValueError(f"Selected source file is not a supported video: {path}")
+        seen.add(path)
+        paths.append(path)
+    if not paths:
+        raise ValueError("No supported source video files were selected.")
+    return sort_video_paths(paths, root, sort_by)
+
+
+def _pick_video_files_macos(title: str) -> list[str]:
+    escaped_title = title.replace('"', '\\"')
+    script = f'''
+set chosenFiles to choose file with prompt "{escaped_title}" with multiple selections allowed
+set output to ""
+repeat with chosenFile in chosenFiles
+    set output to output & POSIX path of chosenFile & linefeed
+end repeat
+return output
+'''
+    try:
+        result = subprocess.run(
+            ["osascript", "-e", script],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            **subprocess_window_kwargs(),
+        )
+        if result.returncode == 0:
+            return [line for line in result.stdout.splitlines() if line]
+    except Exception:
+        return []
+    return []
+
+
+def _pick_video_files_windows(title: str, initial_dir: str | None = None) -> list[str] | None:
+    escaped_title = title.replace("'", "''")
+    escaped_initial = (initial_dir or "").replace("'", "''")
+    script = r'''
+Add-Type -AssemblyName System.Windows.Forms
+[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new()
+
+$dialog = New-Object System.Windows.Forms.OpenFileDialog
+$dialog.Title = '__TITLE__'
+$dialog.Multiselect = $true
+$dialog.CheckFileExists = $true
+$dialog.AutoUpgradeEnabled = $true
+$dialog.Filter = 'Video files|*.mp4;*.mkv;*.mov;*.avi;*.ts;*.m4v;*.flv;*.webm;*.wmv|All files (*.*)|*.*'
+$initial = '__INITIAL_DIR__'
+if ($initial -and (Test-Path -LiteralPath $initial -PathType Container)) {
+  $dialog.InitialDirectory = $initial
+}
+if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
+  $dialog.FileNames | ForEach-Object { Write-Output $_ }
+}
+'''.replace("__TITLE__", escaped_title).replace("__INITIAL_DIR__", escaped_initial)
+    try:
+        result = subprocess.run(
+            ["powershell", "-NoProfile", "-STA", "-ExecutionPolicy", "Bypass", "-Command", script],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            **subprocess_window_kwargs(),
+        )
+        if result.returncode == 0:
+            return [line.strip() for line in result.stdout.splitlines() if line.strip()]
+    except Exception:
+        return None
+    return None
+
+
+def _pick_video_files_tk(title: str, initial_dir: str | None = None) -> list[str]:
+    try:
+        import tkinter as tk
+        from tkinter import filedialog
+
+        root = tk.Tk()
+        root.withdraw()
+        root.attributes("-topmost", True)
+        root.update()
+        selected = filedialog.askopenfilenames(
+            title=title,
+            initialdir=initial_dir or None,
+            filetypes=[
+                ("Video files", "*.mp4 *.mkv *.mov *.avi *.ts *.m4v *.flv *.webm *.wmv"),
+                ("All files", "*.*"),
+            ],
+            parent=root,
+        )
+        root.destroy()
+        return list(selected)
+    except Exception:
+        return []
 
 
 def _pick_folder_macos(title: str) -> str:

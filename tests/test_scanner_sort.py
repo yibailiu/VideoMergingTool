@@ -63,6 +63,42 @@ class ScannerSortTests(unittest.TestCase):
         self.assertEqual([file.name for file in files], ["clip2.mp4", "clip1.mp4"])
         self.assertEqual([file.name for file in reverse_files], ["clip1.mp4", "clip2.mp4"])
 
+    def test_scan_excludes_current_output_directory_from_recursive_inputs(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            output_dir = root / "merged"
+            source_subdir = root / "source"
+            output_dir.mkdir()
+            source_subdir.mkdir()
+            (root / "01.mp4").touch()
+            (source_subdir / "02.mp4").touch()
+            (output_dir / "old-result.mp4").touch()
+
+            files = scan_video_files(
+                root,
+                recursive=True,
+                excluded_dirs=(output_dir,),
+            )
+
+        self.assertCountEqual(
+            [str(path.relative_to(root)) for path in files],
+            ["01.mp4", "source/02.mp4"],
+        )
+
+    def test_scan_does_not_exclude_sources_when_output_is_input_root(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            source = root / "01.mp4"
+            source.touch()
+
+            files = scan_video_files(
+                root,
+                recursive=True,
+                excluded_dirs=(root,),
+            )
+
+        self.assertEqual(files, [source])
+
 
 def _video(path: Path, media_created_at: float | None) -> VideoFile:
     return VideoFile(

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+import tempfile
 from pathlib import Path
 from unittest.mock import patch
 
@@ -9,8 +10,13 @@ from videomerge.gui import (
     _last_picker_dir,
     _load_gui_config,
     _normalize_picked_folder,
+    _normalize_picked_video_files,
+    _common_input_dir,
     _pick_folder,
+    _pick_video_files,
+    _pick_video_files_windows,
     _save_gui_config,
+    _validate_selected_source_files,
 )
 
 
@@ -173,6 +179,63 @@ class GuiFolderPickerTests(unittest.TestCase):
         self.assertTrue(defaults["temp_dir"])
         self.assertIn("ffmpeg", defaults)
         self.assertIn("ffprobe", defaults)
+
+    def test_video_file_picker_supports_multiple_files_and_filters_non_video(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            first = root / "clip10.mp4"
+            second = root / "clip2.mov"
+            ignored = root / "notes.txt"
+            for path in (first, second, ignored):
+                path.touch()
+            with patch("videomerge.gui.platform.system", return_value="Darwin"), patch(
+                "videomerge.gui._pick_video_files_macos",
+                return_value=[str(first), str(second), str(ignored), str(first)],
+            ), patch("videomerge.gui._remember_picker_dir"):
+                selected = _pick_video_files()
+
+        self.assertEqual(selected, [str(first.resolve()), str(second.resolve())])
+
+    def test_windows_video_picker_enables_multi_select(self) -> None:
+        captured_script = []
+
+        def fake_run(args, **kwargs):  # type: ignore[no-untyped-def]
+            captured_script.append(args[-1])
+            return type("Result", (), {"returncode": 0, "stdout": "C:/Videos/a.mp4\nC:/Videos/b.mkv\n"})()
+
+        with patch("videomerge.gui.subprocess.run", side_effect=fake_run):
+            selected = _pick_video_files_windows("Select videos", "C:/Videos")
+
+        self.assertEqual(selected, ["C:/Videos/a.mp4", "C:/Videos/b.mkv"])
+        self.assertIn("Multiselect = $true", captured_script[0])
+        self.assertIn("*.mp4;*.mkv", captured_script[0])
+
+    def test_selected_source_files_are_validated_and_sorted_without_directory_scan(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            later = root / "clip10.mp4"
+            earlier = root / "clip2.mp4"
+            later.touch()
+            earlier.touch()
+
+            selected = _validate_selected_source_files(
+                [str(later), str(earlier)],
+                root,
+                "name-natural-asc",
+            )
+
+        self.assertEqual(selected, [earlier.resolve(), later.resolve()])
+        self.assertEqual(_common_input_dir([str(earlier), str(later)]), str(root))
+
+    def test_normalize_picked_video_files_rejects_missing_and_duplicate_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            source = Path(temp_dir) / "clip.mp4"
+            source.touch()
+            normalized = _normalize_picked_video_files(
+                [str(source), str(source), str(Path(temp_dir) / "missing.mp4")]
+            )
+
+        self.assertEqual(normalized, [str(source.resolve())])
 
 
 if __name__ == "__main__":

@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
 
-from videomerge.gui import HTML, GuiState, _cleanup_cancel_temp_dirs
+from videomerge.gui import HTML, GuiState, _cleanup_cancel_temp_dirs, _is_useful_process_log
 
 
 class GuiCancelTests(unittest.TestCase):
@@ -59,6 +59,29 @@ class GuiCancelTests(unittest.TestCase):
     def test_frontend_sends_api_token_header(self) -> None:
         self.assertIn("X-VideoMergingTool-Token", HTML)
         self.assertIn("__API_TOKEN__", HTML)
+
+    def test_gui_state_retains_complete_logs_and_supports_incremental_reads(self) -> None:
+        state = GuiState()
+        for index in range(450):
+            state.log(f"line {index}")
+
+        first = state.snapshot(0)
+        tail = state.snapshot(445)
+
+        self.assertEqual(len(first["logs"]), 450)
+        self.assertEqual(first["log_cursor"], 450)
+        self.assertEqual(len(tail["logs"]), 5)
+
+    def test_process_console_filters_progress_and_internal_temp_paths(self) -> None:
+        self.assertFalse(_is_useful_process_log("INFO: Progress: 1/3 (33%) preprocessed a.mp4"))
+        self.assertFalse(_is_useful_process_log("INFO: Preprocessing temp directory: /tmp/internal"))
+        self.assertTrue(_is_useful_process_log("INFO: Preprocess decision: transcode a.mp4"))
+
+    def test_frontend_has_direct_file_picker_and_stable_visual_orientation_map(self) -> None:
+        self.assertIn('id="selectFiles"', HTML)
+        self.assertIn("sourceFiles: []", HTML)
+        self.assertIn("state.visualOrientations.get(file.path) || file.orientation", HTML)
+        self.assertIn("/status?after=${state.logCursor}", HTML)
 
 
 if __name__ == "__main__":

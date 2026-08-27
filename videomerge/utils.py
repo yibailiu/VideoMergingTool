@@ -10,6 +10,9 @@ from typing import Iterable, Sequence
 from .errors import CommandError
 
 
+FFMPEG_RUNTIME_ARGS = ("-hide_banner", "-loglevel", "warning", "-nostats", "-nostdin")
+
+
 def subprocess_window_kwargs() -> dict[str, int]:
     if os.name != "nt":
         return {}

@@ -12,7 +12,9 @@ from .errors import CommandError, ProbeError
 from .gpu import GpuPlan, gpu_encoder_quality_args
 from .models import Canvas, CodecPlan, ToolPaths, VideoFile
 from .probe import probe_file
-from .utils import run_command
+from .utils import FFMPEG_RUNTIME_ARGS, run_command
+
+
 @dataclass(frozen=True)
 class AudioTarget:
     codec: str
@@ -30,6 +32,17 @@ class PreprocessSegment:
     @property
     def copy_compatible(self) -> bool:
         return self.action == "copy"
+
+
+@dataclass(frozen=True)
+class PreprocessJob:
+    output_index: int
+    segment_index: int
+    file_index: int
+    file: VideoFile
+    action: str
+    segment_action: str
+    output_path: Path
 
 
 def preprocess_group(
@@ -116,75 +129,69 @@ def preprocess_group(
     )
     logger.info("Preprocessing temp directory: %s", temp_dir)
 
-    # 预分配数组以确保并发结果按照原始分段顺序插入
-    outputs: list[list[Path]] = [[] for _ in segments]
+    outputs, jobs, passthrough_files = _build_preprocess_jobs(
+        segments,
+        passthrough_signature,
+        temp_dir,
+    )
+    if passthrough_files:
+        logger.info(
+            "Preprocess decision: passthrough %d ready file(s) without temp concat/transcode.",
+            len(passthrough_files),
+        )
+        if progress_callback:
+            for file in passthrough_files:
+                progress_callback(file)
 
-    # 包装单个分段的处理逻辑
-    def worker(idx: int, segment: PreprocessSegment) -> tuple[int, list[Path]]:
-        if (
-            segment.copy_compatible
-            and passthrough_signature is not None
-            and _concat_signature(segment.files[0]) == passthrough_signature
-        ):
-            logger.info(
-                "Preprocess decision: passthrough %d ready file(s) without temp concat/transcode.",
-                len(segment.files),
-            )
-            processed_paths = [file.path for file in segment.files]
-        else:
-            action = _effective_segment_action(segment, passthrough_signature)
-            processed_paths = []
-            for file_idx, file in enumerate(segment.files):
-                if len(segment.files) == 1:
-                    output_name = f"{(idx + 1):04d}_{file.stem_safe}.mp4"
-                else:
-                    output_name = f"{(idx + 1):04d}_{(file_idx + 1):04d}_{file.stem_safe}.mp4"
-                processed_paths.append(
-                    preprocess_file(
-                        file=file,
-                        output_path=temp_dir / output_name,
-                        canvas=canvas,
-                        fps=fps,
-                        codec_plan=codec_plan,
-                        audio_target=audio_target,
-                        tools=tools,
-                        logger=logger,
-                        pad_color=pad_color,
-                        crf=crf,
-                        preset=preset,
-                        dry_run=dry_run,
-                        gpu_plan=gpu_plan,
-                        force_video_transcode=action == "transcode" and segment.action == "copy",
-                        force_remux=action == "remux" and segment.action == "copy",
-                        target_video_bitrate=target_video_bitrate,
-                        target_video_timescale=target_video_timescale,
-                    )
-                )
-        return idx, processed_paths
+    def worker(job: PreprocessJob) -> tuple[int, Path]:
+        return job.output_index, preprocess_file(
+            file=job.file,
+            output_path=job.output_path,
+            canvas=canvas,
+            fps=fps,
+            codec_plan=codec_plan,
+            audio_target=audio_target,
+            tools=tools,
+            logger=logger,
+            pad_color=pad_color,
+            crf=crf,
+            preset=preset,
+            dry_run=dry_run,
+            gpu_plan=gpu_plan,
+            force_video_transcode=job.action == "transcode" and job.segment_action == "copy",
+            force_remux=job.action == "remux" and job.segment_action == "copy",
+            target_video_bitrate=target_video_bitrate,
+            target_video_timescale=target_video_timescale,
+        )
 
+    lightweight_jobs = [job for job in jobs if job.action in {"remux", "audio"}]
+    video_jobs = [job for job in jobs if job.action not in {"remux", "audio"}]
+    _execute_preprocess_jobs(
+        lightweight_jobs,
+        min(2, len(lightweight_jobs)) if lightweight_jobs else 1,
+        worker,
+        outputs,
+        progress_callback,
+        logger,
+        "remux/audio",
+    )
     is_gpu_enabled = gpu_plan is not None and gpu_plan.enabled
-    max_workers = min(max(1, gpu_workers), 3, len(segments)) if is_gpu_enabled else 1
+    video_workers = (
+        min(max(1, gpu_workers), 3, len(video_jobs))
+        if is_gpu_enabled and video_jobs
+        else 1
+    )
+    _execute_preprocess_jobs(
+        video_jobs,
+        video_workers,
+        worker,
+        outputs,
+        progress_callback,
+        logger,
+        "GPU video" if is_gpu_enabled else "CPU video",
+    )
 
-    if max_workers > 1 and len(segments) > 1:
-        logger.info("Using parallel processing with %d workers (GPU enabled).", max_workers)
-        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-            futures = {executor.submit(worker, i, seg): i for i, seg in enumerate(segments)}
-            for future in concurrent.futures.as_completed(futures):
-                idx, paths = future.result()
-                outputs[idx] = paths
-                if progress_callback:
-                    for file in segments[idx].files:
-                        progress_callback(file)
-    else:
-        # 串行模式（原始逻辑）
-        for i, segment in enumerate(segments):
-            _, paths = worker(i, segment)
-            outputs[i] = paths
-            if progress_callback:
-                for file in segment.files:
-                    progress_callback(file)
-
-    flattened_outputs = [path for segment_paths in outputs for path in segment_paths]
+    flattened_outputs = [path for path in outputs if path is not None]
     if len(flattened_outputs) != len(files):
         raise CommandError(
             "Preprocess output count mismatch: "
@@ -199,6 +206,80 @@ def preprocess_group(
         logger.info("Keeping temp files in %s", temp_dir)
         return flattened_outputs, None
     return flattened_outputs, temp_owner
+
+
+def _build_preprocess_jobs(
+    segments: list[PreprocessSegment],
+    passthrough_signature: tuple[object, ...] | None,
+    temp_dir: Path,
+) -> tuple[list[Path | None], list[PreprocessJob], list[VideoFile]]:
+    outputs: list[Path | None] = []
+    jobs: list[PreprocessJob] = []
+    passthrough_files: list[VideoFile] = []
+    output_index = 0
+    for segment_index, segment in enumerate(segments):
+        action = _effective_segment_action(segment, passthrough_signature)
+        for file_index, file in enumerate(segment.files):
+            outputs.append(None)
+            if action == "copy":
+                outputs[output_index] = file.path
+                passthrough_files.append(file)
+            else:
+                if len(segment.files) == 1:
+                    output_name = f"{(segment_index + 1):04d}_{file.stem_safe}.mp4"
+                else:
+                    output_name = (
+                        f"{(segment_index + 1):04d}_{(file_index + 1):04d}_{file.stem_safe}.mp4"
+                    )
+                jobs.append(
+                    PreprocessJob(
+                        output_index=output_index,
+                        segment_index=segment_index,
+                        file_index=file_index,
+                        file=file,
+                        action=action,
+                        segment_action=segment.action,
+                        output_path=temp_dir / output_name,
+                    )
+                )
+            output_index += 1
+    return outputs, jobs, passthrough_files
+
+
+def _execute_preprocess_jobs(
+    jobs: list[PreprocessJob],
+    max_workers: int,
+    worker: Callable[[PreprocessJob], tuple[int, Path]],
+    outputs: list[Path | None],
+    progress_callback: Callable[[VideoFile], None] | None,
+    logger: logging.Logger,
+    label: str,
+) -> None:
+    if not jobs:
+        return
+    worker_count = min(max(1, max_workers), len(jobs))
+    logger.info(
+        "Preprocess scheduler: %s jobs=%d workers=%d.",
+        label,
+        len(jobs),
+        worker_count,
+    )
+    if worker_count == 1:
+        for job in jobs:
+            output_index, path = worker(job)
+            outputs[output_index] = path
+            if progress_callback:
+                progress_callback(job.file)
+        return
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=worker_count) as executor:
+        futures = {executor.submit(worker, job): job for job in jobs}
+        for future in concurrent.futures.as_completed(futures):
+            job = futures[future]
+            output_index, path = future.result()
+            outputs[output_index] = path
+            if progress_callback:
+                progress_callback(job.file)
 
 
 def preprocess_file(
@@ -259,7 +340,7 @@ def preprocess_file(
     args: list[str | Path] = [
         tools.ffmpeg,
         "-y",
-        "-hide_banner",
+        *FFMPEG_RUNTIME_ARGS,
         "-noautorotate",
         "-display_rotation:v:0",
         "0",
@@ -391,7 +472,7 @@ def remux_copy(
     args: list[str | Path] = [
         tools.ffmpeg,
         "-y",
-        "-hide_banner",
+        *FFMPEG_RUNTIME_ARGS,
         "-noautorotate",
         "-display_rotation:v:0",
         "0",

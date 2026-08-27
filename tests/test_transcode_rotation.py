@@ -12,6 +12,7 @@ from videomerge.models import Canvas, CodecPlan, Orientation, ToolPaths, VideoFi
 from videomerge.transcode import (
     AudioTarget,
     PreprocessSegment,
+    _build_preprocess_jobs,
     _log_size_estimate,
     build_preprocess_segments,
     build_video_filter,
@@ -87,6 +88,8 @@ class TranscodeRotationTests(unittest.TestCase):
             )
 
         self.assertLess(captured_args.index("-noautorotate"), captured_args.index("-i"))
+        self.assertLess(captured_args.index("-nostats"), captured_args.index("-i"))
+        self.assertLess(captured_args.index("-nostdin"), captured_args.index("-i"))
         self.assertLess(captured_args.index("-display_rotation:v:0"), captured_args.index("-i"))
         self.assertEqual(captured_args[captured_args.index("-display_rotation:v:0") + 1], "0")
         self.assertIn("transpose=2", captured_args[captured_args.index("-vf") + 1])
@@ -358,10 +361,45 @@ class TranscodeRotationTests(unittest.TestCase):
         self.assertTrue(all(output != file.path for output, file in zip(outputs[3:], alternate)))
         self.assertEqual(len(captured_commands), 2)
         self.assertTrue(all("-vf" not in command for command in captured_commands))
-        self.assertEqual(
+        self.assertCountEqual(
             [command[command.index("-i") + 1] for command in captured_commands],
             [file.path for file in alternate],
         )
+
+    def test_preprocess_jobs_flatten_segments_without_changing_output_order(self) -> None:
+        dominant = [
+            replace(_plain_video(), path=Path(f"dominant-{index}.mp4"))
+            for index in range(4)
+        ]
+        alternate = [
+            replace(
+                _plain_video(),
+                path=Path(f"alternate-{index}.mp4"),
+                video_time_base="1/90000",
+            )
+            for index in range(3)
+        ]
+        audio_target = AudioTarget("aac", "aac", 48000, 2, "128k")
+        segments = build_preprocess_segments(
+            [*dominant, *alternate],
+            Canvas(1280, 720),
+            30.0,
+            CodecPlan("h264", "aac", "libx264", "aac"),
+            audio_target,
+        )
+        passthrough_signature = choose_passthrough_signature(segments)
+
+        outputs, jobs, passthrough_files = _build_preprocess_jobs(
+            segments,
+            passthrough_signature,
+            Path("temp"),
+        )
+
+        self.assertEqual(passthrough_files, dominant)
+        self.assertEqual(outputs[:4], [file.path for file in dominant])
+        self.assertEqual([job.file for job in jobs], alternate)
+        self.assertEqual([job.output_index for job in jobs], [4, 5, 6])
+        self.assertTrue(all(job.action == "remux" for job in jobs))
 
     def test_container_only_difference_uses_remux(self) -> None:
         file = _plain_video().__class__(**{**_plain_video().__dict__, "path": Path("clip.mkv"), "container": "matroska"})
