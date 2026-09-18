@@ -596,6 +596,9 @@ def _source_total_size(files: list[VideoFile]) -> int:
 
 
 def _container_adjusted_plan(plan: CodecPlan, output_format: str, logger: logging.Logger) -> CodecPlan:
+    if output_format == "mp4" and plan.audio_codec not in {"aac", "mp3"}:
+        logger.warning("Switching target audio encoder to AAC for %s compatibility.", output_format)
+        plan = CodecPlan(plan.video_codec, "aac", plan.output_video_encoder, "aac")
     if output_format == "webm":
         if plan.output_video_encoder not in {"libvpx", "libvpx-vp9", "libaom-av1"}:
             logger.warning("Switching target video encoder to VP9 for webm compatibility.")

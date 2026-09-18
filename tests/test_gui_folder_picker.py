@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import unittest
 import tempfile
+import types
+import ctypes
 from pathlib import Path
 from unittest.mock import patch
 
@@ -15,6 +17,8 @@ from videomerge.gui import (
     _pick_folder,
     _pick_video_files,
     _pick_video_files_windows,
+    _system_ui_language,
+    _dialog_language,
     _save_gui_config,
     _validate_selected_source_files,
 )
@@ -31,7 +35,7 @@ class GuiFolderPickerTests(unittest.TestCase):
             selected = _pick_folder("source")
 
         self.assertEqual(selected, "C:/Videos")
-        pick_windows.assert_called_once_with("Select source video folder", "")
+        pick_windows.assert_called_once_with("Select source video folder", "", "en")
         pick_tk.assert_not_called()
         pick_macos.assert_not_called()
 
@@ -79,6 +83,7 @@ class GuiFolderPickerTests(unittest.TestCase):
                         "inputDir": "/private/source",
                         "outputDir": "/private/output",
                         "tempDir": "/private/temp",
+                        "columnWidths": [46, 240, 95, 100, 65, 75, 140, 75, 90, 76],
                     }
                 )
                 loaded = _load_gui_config()
@@ -90,6 +95,7 @@ class GuiFolderPickerTests(unittest.TestCase):
         self.assertEqual(loaded["format"], "mkv")
         self.assertEqual(loaded["outputDir"], "/private/output")
         self.assertEqual(loaded["tempDir"], "/private/temp")
+        self.assertEqual(loaded["columnWidths"][1], 240)
         self.assertNotIn("name", loaded)
         self.assertNotIn("inputDir", loaded)
 
@@ -101,7 +107,7 @@ class GuiFolderPickerTests(unittest.TestCase):
             selected = _pick_folder("temp")
 
         self.assertEqual(selected, "C:/Temp")
-        pick_windows.assert_called_once_with("Select temp folder", "")
+        pick_windows.assert_called_once_with("Select temp folder", "", "en")
 
     def test_windows_picker_uses_native_file_explorer_dialog(self) -> None:
         commands = []
@@ -139,7 +145,7 @@ class GuiFolderPickerTests(unittest.TestCase):
                 path.unlink(missing_ok=True)
 
         self.assertEqual(selected, "C:/Videos")
-        pick_windows.assert_called_once_with("Select source video folder", "/tmp")
+        pick_windows.assert_called_once_with("Select source video folder", "/tmp", "en")
 
     def test_last_picker_dir_falls_back_to_existing_parent(self) -> None:
         with patch("videomerge.gui._config_path", return_value=Path("/tmp/vmt-picker-config.json")) as config_path:
@@ -209,6 +215,92 @@ class GuiFolderPickerTests(unittest.TestCase):
         self.assertEqual(selected, ["C:/Videos/a.mp4", "C:/Videos/b.mkv"])
         self.assertIn("Multiselect = $true", captured_script[0])
         self.assertIn("*.mp4;*.mkv", captured_script[0])
+
+    def test_chinese_windows_picker_localizes_both_dialogs(self) -> None:
+        scripts = []
+
+        def fake_run(args, **kwargs):  # type: ignore[no-untyped-def]
+            scripts.append(args[-1])
+            return type("Result", (), {"returncode": 0, "stdout": ""})()
+
+        with patch("videomerge.gui.platform.system", return_value="Windows"), patch(
+            "videomerge.gui.subprocess.run", side_effect=fake_run
+        ):
+            self.assertEqual(_pick_folder("source", "zh"), "")
+            self.assertEqual(_pick_video_files_windows("选择视频", "C:/Videos", "zh"), [])
+
+        self.assertIn("选择源视频文件夹", scripts[0])
+        self.assertIn("选择此文件夹", scripts[0])
+        self.assertIn("所有文件 (*.*)", scripts[0])
+        self.assertIn("视频文件", scripts[1])
+        self.assertIn("所有文件 (*.*)", scripts[1])
+
+    def test_macos_picker_receives_chinese_prompt(self) -> None:
+        with patch("videomerge.gui.platform.system", return_value="Darwin"), patch(
+            "videomerge.gui._pick_folder_macos", return_value=""
+        ) as pick_macos, patch(
+            "videomerge.gui._pick_video_files_macos", return_value=[]
+        ) as pick_files:
+            _pick_folder("source", "zh")
+            _pick_video_files("zh")
+
+        pick_macos.assert_called_once_with("选择源视频文件夹")
+        pick_files.assert_called_once_with("选择一个或多个源视频文件")
+
+    def test_linux_picker_receives_chinese_title_and_filter(self) -> None:
+        captured = {}
+
+        class Dialog:
+            @staticmethod
+            def askopenfilenames(**kwargs):  # type: ignore[no-untyped-def]
+                captured.update(kwargs)
+                return []
+
+        class Root:
+            def withdraw(self): pass
+            def attributes(self, *args): pass
+            def update(self): pass
+            def destroy(self): pass
+
+        import sys
+        import types
+
+        tk = types.ModuleType("tkinter")
+        tk.Tk = Root  # type: ignore[attr-defined]
+        tk.filedialog = Dialog  # type: ignore[attr-defined]
+        with patch.dict(sys.modules, {"tkinter": tk, "tkinter.filedialog": Dialog}), patch(
+            "videomerge.gui.platform.system", return_value="Linux"
+        ):
+            _pick_video_files("zh")
+
+        self.assertEqual(captured["title"], "选择一个或多个源视频文件")
+        self.assertEqual(captured["filetypes"][0][0], "视频文件")
+
+    def test_system_language_uses_macos_preferred_language(self) -> None:
+        result = type("Result", (), {"returncode": 0, "stdout": '(\n    "zh-Hans-CN",\n    "en-US"\n)\n'})()
+        with patch("videomerge.gui.platform.system", return_value="Darwin"), patch(
+            "videomerge.gui.subprocess.run", return_value=result
+        ):
+            self.assertEqual(_system_ui_language(), "zh")
+
+    def test_system_language_uses_windows_display_language(self) -> None:
+        windll = types.SimpleNamespace(
+            kernel32=types.SimpleNamespace(GetUserDefaultUILanguage=lambda: 0x0804)
+        )
+        with patch("videomerge.gui.platform.system", return_value="Windows"), patch.object(
+            ctypes, "windll", windll, create=True
+        ):
+            self.assertEqual(_system_ui_language(), "zh")
+
+    def test_system_language_uses_linux_locale(self) -> None:
+        with patch("videomerge.gui.platform.system", return_value="Linux"), patch.dict(
+            "videomerge.gui.os.environ", {"LANGUAGE": "zh_CN:en_US"}
+        ):
+            self.assertEqual(_system_ui_language(), "zh")
+
+    def test_native_dialog_uses_chinese_on_chinese_os_even_if_app_was_saved_in_english(self) -> None:
+        with patch("videomerge.gui._system_ui_language", return_value="zh"):
+            self.assertEqual(_dialog_language("en"), "zh")
 
     def test_selected_source_files_are_validated_and_sorted_without_directory_scan(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

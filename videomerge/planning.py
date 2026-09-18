@@ -95,6 +95,8 @@ def _default_video_codec(output_format: str) -> str:
 
 
 def _adjust_for_container(plan: CodecPlan, output_format: str) -> CodecPlan:
+    if output_format == "mp4" and plan.audio_codec not in {"aac", "mp3"}:
+        plan = CodecPlan(plan.video_codec, "aac", plan.output_video_encoder, "aac")
     if output_format != "webm":
         return plan
     video_codec = plan.video_codec if plan.output_video_encoder in {"libvpx", "libvpx-vp9", "libaom-av1"} else "vp9"

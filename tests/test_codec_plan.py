@@ -6,6 +6,8 @@ from pathlib import Path
 
 from videomerge.cli import _container_adjusted_plan, _default_transcode_video_codec, _resolve_quality_settings
 from videomerge.grouping import majority_codec_plan
+from videomerge.planning import build_extreme_group_plan
+from videomerge.transcode import choose_audio_action, choose_audio_target
 from videomerge.models import Orientation, VideoFile
 
 
@@ -35,6 +37,30 @@ class CodecPlanTests(unittest.TestCase):
 
         self.assertEqual(plan.video_codec, "hevc")
         self.assertEqual(plan.output_video_encoder, "libx265")
+
+    def test_wmv_audio_uses_aac_instead_of_copying_wmav2_to_mp4(self) -> None:
+        source = _video("one.wmv", "wmv2")
+        source = VideoFile(**{**source.__dict__, "container": "asf", "audio_codec": "wmav2"})
+
+        plan = build_extreme_group_plan([source], output_format="mp4", requested_video_codec="hevc")
+
+        self.assertEqual(plan.codec_plan.audio_codec, "aac")
+        self.assertEqual(plan.codec_plan.output_audio_encoder, "aac")
+        self.assertEqual(plan.actions[source.path], "transcode")
+        self.assertEqual(choose_audio_action(source, choose_audio_target([source], plan.codec_plan)), "encode")
+
+    def test_unsupported_explicit_audio_codec_cannot_create_mismatched_target(self) -> None:
+        plan = majority_codec_plan([_video("one.wmv", "wmv2")], "h264", "wmav2")
+
+        self.assertEqual(plan.audio_codec, "aac")
+        self.assertEqual(plan.output_audio_encoder, "aac")
+
+    def test_mp4_requested_pcm_audio_is_adjusted_to_aac(self) -> None:
+        source = _video("one.mp4", "h264")
+        plan = build_extreme_group_plan([source], output_format="mp4", requested_audio_codec="pcm_s16le")
+
+        self.assertEqual(plan.codec_plan.audio_codec, "aac")
+        self.assertEqual(plan.codec_plan.output_audio_encoder, "aac")
 
     def test_webm_auto_transcode_defaults_to_vp9_and_opus(self) -> None:
         files = [_video("one.mp4", "mpeg4")]

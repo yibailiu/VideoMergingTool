@@ -18,7 +18,9 @@
 
 ---
 
-VideoMergingTool helps you combine many video clips into longer videos without uploading your files anywhere. It is designed for everyday desktop use: install the app, choose a folder, review the detected videos, pick a merge mode, and start.
+VideoMergingTool helps you combine video clips into longer videos without uploading your files anywhere. It is designed for everyday desktop use: install the app, choose a folder or specific video files, review the detected videos, pick a merge mode, and start.
+
+Current `dev` branch version: `5.3.0`. Check the [Releases page](https://github.com/yibailiu/VideoMergingTool/releases) to see which installer versions have been published.
 
 The packaged Windows and macOS apps include FFmpeg and FFprobe, so normal users do not need to install FFmpeg manually.
 
@@ -27,14 +29,16 @@ The packaged Windows and macOS apps include FFmpeg and FFprobe, so normal users 
   <img src="assets/screenshots/screenshot_en.png" width="960" alt="VideoMergingTool 图标">
 </p>
 
-- Finds common video files in a folder, including `mp4`, `mkv`, `mov`, `avi`, `ts`, `m4v`, `flv`, and `webm`
+- Scans a folder or lets you select one or more specific videos; supports `mp4`, `mkv`, `mov`, `avi`, `ts`, `m4v`, `flv`, `webm`, and `wmv`
 - Shows useful details such as duration, resolution, codec, FPS, and status
+- Lets you drag video-table header boundaries to resize columns; widths are saved for the next launch
+- Localizes file and folder picker captions and filters; Chinese systems prefer Chinese text
 - Opens a source in the system video player and lets you mark rotation or exclusion without modifying the source file or list order
 - Merges videos in a predictable order, with common sorting options
 - Supports landscape and portrait videos
 - Keeps the original picture visible when resizing is needed; it pads instead of cropping
 - Lets you choose output folder, temp folder, language, merge mode, GPU option, and whether to keep temp files
-- Shows process logs and progress inside the app window
+- Shows complete process logs and progress inside the app window
 - Runs locally in a desktop window, without opening an external browser
 
 ## Download
@@ -51,8 +55,8 @@ Go to the [Releases page](https://github.com/yibailiu/VideoMergingTool/releases)
 ## Quick Start
 
 1. Open VideoMergingTool.
-2. Click **Select Folder** and choose the folder that contains your videos.
-3. Confirm the detected files and merge order.
+2. Click **Select Folder** to scan a whole folder, or **Select Files** to add only the videos you choose.
+3. Confirm the detected files and merge order. Landscape/portrait groups are visual only; the merge uses one global sort order. Drag a header boundary to resize its column.
 4. Choose a merge mode:
    - **Fast Merge** for compatible files when you want the fastest lossless merge.
    - **Optimal Merge** for mixed landscape or portrait files in most normal cases.
@@ -70,13 +74,15 @@ Go to the [Releases page](https://github.com/yibailiu/VideoMergingTool/releases)
 
 If you are not sure, start with **Optimal Merge**.
 
+When WMV or another source has an audio codec that MP4 cannot contain, **Optimal Merge** and **Extreme Merge** re-encode the audio when needed (for example, to AAC) instead of copying an incompatible stream. **Fast Merge** uses stream copy only and cannot re-encode incompatible audio.
+
 ## Settings Reference
 
 Most users can use the desktop controls without typing any command. The table below explains what each important option means. The CLI option is included for users who automate the app.
 
 | App setting | CLI option | What it means |
 | --- | --- | --- |
-| Source Folder | `input_dir` | The folder that contains the videos you want to merge. |
+| Source Folder | `input_dir` | The folder that contains the videos you want to merge. The app's **Select Files** option processes only the chosen files. |
 | Merge Mode | `--mode fast\|optimal\|extreme` | Chooses the merge strategy. Use `optimal` when unsure. |
 | Output Folder | `--output-dir PATH` | Where merged videos are saved. If left as default, the app uses a `merged` folder under the source folder. |
 | Output Format | `--output-format mp4\|mkv\|mov\|avi\|ts\|webm` | The container format of the merged output. `mp4` is the safest default for most users. |
@@ -90,7 +96,7 @@ Most users can use the desktop controls without typing any command. The table be
 | GPU Acceleration | `--gpu off\|auto\|nvenc\|qsv\|amf\|videotoolbox` | Uses hardware encoding when available. `auto` is convenient; `off` is safest for compatibility. |
 | GPU Concurrent Jobs | `--gpu-workers 1-3` | Defaults to `1` to avoid GPU contention. Increase it manually on high-end hardware. |
 | Target Video Codec | `--video-codec TEXT` | Overrides the output video codec. Auto preserves the dominant source codec when compatible with the output container. |
-| Target Audio Codec | `--audio-codec TEXT` | Overrides the output audio codec. Compatible source audio is copied when possible and re-encoded only when needed. |
+| Target Audio Codec | `--audio-codec TEXT` | Overrides the output audio codec. Compatible source audio is copied when possible; audio such as WMAV2 is converted to AAC for MP4. |
 | Quality Profile | `--quality-profile balanced\|high\|small` | Selects the size, clarity, and speed strategy. Default is `balanced`. |
 | Quality | `--crf 0-51` | Overrides the quality profile CRF. Lower values usually mean better quality and larger files. Balanced defaults to `23`. |
 | Encoder Preset | `--preset TEXT` | Overrides the quality profile encoder preset. Balanced defaults to `medium`. |

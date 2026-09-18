@@ -66,10 +66,14 @@ def majority_codec_plan(
         if source_video_codec in {"h264", "hevc", "vp8", "vp9", "av1"}
         else default_video_codec
     )
-    audio_codec = requested_audio_codec or _most_common(
+    source_audio_codec = _most_common(
         [_normalize_audio_codec(file.audio_codec) for file in file_list if file.audio_codec],
         "aac",
     )
+    selected_audio_codec = requested_audio_codec or source_audio_codec
+    audio_codec = selected_audio_codec if selected_audio_codec in {
+        "aac", "mp3", "opus", "vorbis", "pcm_s16le"
+    } else "aac"
     return CodecPlan(
         video_codec=video_codec,
         audio_codec=audio_codec,

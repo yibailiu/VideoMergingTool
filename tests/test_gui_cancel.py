@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
@@ -82,6 +83,13 @@ class GuiCancelTests(unittest.TestCase):
         self.assertIn("sourceFiles: []", HTML)
         self.assertIn("state.visualOrientations.get(file.path) || file.orientation", HTML)
         self.assertIn("/status?after=${state.logCursor}", HTML)
+
+    def test_video_table_has_resizable_persisted_columns(self) -> None:
+        self.assertEqual(len(re.findall('class="column-resize-handle"', HTML)), 10)
+        self.assertIn('id="videoColumns"', HTML)
+        self.assertIn('handle.setPointerCapture(event.pointerId)', HTML)
+        self.assertIn('event.key === "ArrowRight"', HTML)
+        self.assertIn('columnWidths: [...columnWidths]', HTML)
 
 
 if __name__ == "__main__":

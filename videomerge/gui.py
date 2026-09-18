@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import locale
 import logging
 import os
 import platform
@@ -61,7 +62,31 @@ CONFIG_FIELD_IDS = [
     "autoDownloadDeps",
     "notifyOnComplete",
     "playSoundOnComplete",
+    "columnWidths",
 ]
+
+PICKER_TEXT = {
+    "en": {
+        "source": "Select source video folder",
+        "output": "Select output folder",
+        "temp": "Select temp folder",
+        "folder": "Select folder",
+        "files": "Select one or more source video files",
+        "video_filter": "Video files",
+        "all_filter": "All files (*.*)",
+        "folder_placeholder": "Select this folder",
+    },
+    "zh": {
+        "source": "选择源视频文件夹",
+        "output": "选择输出文件夹",
+        "temp": "选择临时文件夹",
+        "folder": "选择文件夹",
+        "files": "选择一个或多个源视频文件",
+        "video_filter": "视频文件",
+        "all_filter": "所有文件 (*.*)",
+        "folder_placeholder": "选择此文件夹",
+    },
+}
 
 
 HTML = r"""<!doctype html>
@@ -270,6 +295,42 @@ HTML = r"""<!doctype html>
       font-size: 11px;
       text-transform: uppercase;
       letter-spacing: .08em;
+      white-space: nowrap;
+      overflow: visible;
+    }
+    th > span:not(.column-resize-handle) {
+      display: block;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .column-resize-handle {
+      position: absolute;
+      top: 0;
+      right: 0;
+      bottom: 0;
+      z-index: 3;
+      width: 10px;
+      cursor: col-resize;
+      touch-action: none;
+    }
+    .column-resize-handle::after {
+      content: "";
+      position: absolute;
+      top: 7px;
+      bottom: 7px;
+      left: 4px;
+      width: 2px;
+      border-radius: 1px;
+      background: transparent;
+    }
+    .column-resize-handle:hover::after,
+    .column-resize-handle:focus-visible::after,
+    .column-resize-handle.active::after { background: var(--accent-red); }
+    body.column-resizing, body.column-resizing * {
+      cursor: col-resize !important;
+      user-select: none !important;
+      -webkit-user-select: none !important;
     }
     td {
       padding: 10px;
@@ -646,22 +707,31 @@ HTML = r"""<!doctype html>
           </div>
         </div>
         <div class="table-wrap">
-          <table>
-            <colgroup>
+          <table id="videoTable">
+            <colgroup id="videoColumns">
               <col style="width: 46px">
-              <col style="width: 20%">
-              <col style="width: 9%">
-              <col style="width: 10%">
-              <col style="width: 6%">
-              <col style="width: 7%">
-              <col style="width: 14%">
-              <col style="width: 8%">
-              <col style="width: 10%">
+              <col style="width: 180px">
+              <col style="width: 95px">
+              <col style="width: 100px">
+              <col style="width: 65px">
+              <col style="width: 75px">
+              <col style="width: 140px">
+              <col style="width: 75px">
+              <col style="width: 90px">
               <col style="width: 76px">
             </colgroup>
             <thead>
               <tr>
-                <th class="select-head"></th><th data-i18n="filename">Filename</th><th data-i18n="resolution">Resolution</th><th data-i18n="codec">Codec</th><th>FPS</th><th data-i18n="duration">Dur</th><th data-i18n="mediaCreatedTime">Media Created</th><th data-i18n="fileSize">Size</th><th data-i18n="status">Status</th><th data-i18n="actions">Actions</th>
+                <th class="select-head"><span class="column-resize-handle" role="separator" tabindex="0" data-column="0"></span></th>
+                <th><span data-i18n="filename">Filename</span><span class="column-resize-handle" role="separator" tabindex="0" data-column="1"></span></th>
+                <th><span data-i18n="resolution">Resolution</span><span class="column-resize-handle" role="separator" tabindex="0" data-column="2"></span></th>
+                <th><span data-i18n="codec">Codec</span><span class="column-resize-handle" role="separator" tabindex="0" data-column="3"></span></th>
+                <th><span>FPS</span><span class="column-resize-handle" role="separator" tabindex="0" data-column="4"></span></th>
+                <th><span data-i18n="duration">Dur</span><span class="column-resize-handle" role="separator" tabindex="0" data-column="5"></span></th>
+                <th><span data-i18n="mediaCreatedTime">Media Created</span><span class="column-resize-handle" role="separator" tabindex="0" data-column="6"></span></th>
+                <th><span data-i18n="fileSize">Size</span><span class="column-resize-handle" role="separator" tabindex="0" data-column="7"></span></th>
+                <th><span data-i18n="status">Status</span><span class="column-resize-handle" role="separator" tabindex="0" data-column="8"></span></th>
+                <th><span data-i18n="actions">Actions</span><span class="column-resize-handle" role="separator" tabindex="0" data-column="9"></span></th>
               </tr>
             </thead>
             <tbody id="fileRows"></tbody>
@@ -754,7 +824,7 @@ HTML = r"""<!doctype html>
     const messages = {
       en: {
         ffmpegNotChecked: "! FFmpeg Not Checked", ffmpegChecking: "... Checking FFmpeg", ffmpegInstalled: "✓ FFmpeg Installed", ffmpegMissing: "! FFmpeg Missing", refreshFfmpeg: "Refresh FFmpeg check",
-        sourceFiles: "Source Files", noFolderSelected: "No folder or files selected", selectFolder: "Select Folder", selectFiles: "Select Files", filename: "Filename", resolution: "Resolution", codec: "Codec", duration: "Dur", mediaCreatedTime: "Media Created", fileSize: "Size", status: "Status", actions: "Actions",
+        sourceFiles: "Source Files", noFolderSelected: "No folder or files selected", selectFolder: "Select Folder", selectFiles: "Select Files", filename: "Filename", resolution: "Resolution", codec: "Codec", duration: "Dur", mediaCreatedTime: "Media Created", fileSize: "Size", status: "Status", actions: "Actions", selectionColumn: "Selection", resizeColumn: "Resize column",
         processConsole: "Process Console", configuration: "Configuration", mergeStrategy: "Merge Strategy", outputSettings: "Output Settings", browse: "Browse",
         fastMerge: "Fast Merge", optimalMerge: "Optimal Merge", extremeMerge: "Extreme Merge", lossless: "Lossless", smart: "Smart", bruteForce: "Brute Force",
         fastDesc: "Stream copy only. Skips incompatible groups.", optimalDesc: "Groups by orientation and transcodes when needed.", extremeDesc: "Normalizes all files into one output.",
@@ -812,7 +882,7 @@ HTML = r"""<!doctype html>
       },
       zh: {
         ffmpegNotChecked: "! FFmpeg 未检查", ffmpegChecking: "... 正在检查 FFmpeg", ffmpegInstalled: "✓ FFmpeg 已安装", ffmpegMissing: "! FFmpeg 缺失", refreshFfmpeg: "重新检查 FFmpeg",
-        sourceFiles: "源文件", noFolderSelected: "未选择文件夹或视频", selectFolder: "选择文件夹", selectFiles: "选择文件", filename: "文件名", resolution: "分辨率", codec: "编码", duration: "时长", mediaCreatedTime: "创建媒体日期", fileSize: "大小", status: "状态", actions: "操作",
+        sourceFiles: "源文件", noFolderSelected: "未选择文件夹或视频", selectFolder: "选择文件夹", selectFiles: "选择文件", filename: "文件名", resolution: "分辨率", codec: "编码", duration: "时长", mediaCreatedTime: "创建媒体日期", fileSize: "大小", status: "状态", actions: "操作", selectionColumn: "选择", resizeColumn: "调整列宽",
         processConsole: "处理控制台", configuration: "配置", mergeStrategy: "合并策略", outputSettings: "输出设置", browse: "浏览",
         fastMerge: "快速合并", optimalMerge: "智能合并", extremeMerge: "强制合并", lossless: "无损", smart: "智能", bruteForce: "强制",
         fastDesc: "仅使用流复制，跳过不兼容分组。", optimalDesc: "按横竖屏分组，必要时转码。", extremeDesc: "统一所有文件到一个输出。",
@@ -883,11 +953,14 @@ HTML = r"""<!doctype html>
       mergeWasRunning: false,
       logCursor: 0,
       runLogs: [],
-      lang: "en",
+      lang: "__DEFAULT_LANG__",
       deps: { status: "notChecked", message: "" },
       defaults: {}
     };
     const pathFields = ["outputDir", "tempDir", "ffmpegPath", "ffprobePath"];
+    const defaultColumnWidths = [46, 180, 95, 100, 65, 75, 140, 75, 90, 76];
+    const minColumnWidths = [36, 100, 75, 80, 50, 60, 105, 60, 75, 70];
+    let columnWidths = [...defaultColumnWidths];
     const $ = (id) => document.getElementById(id);
     const t = (key, values = {}) => {
       let text = (messages[state.lang] && messages[state.lang][key]) || messages.en[key] || key;
@@ -900,6 +973,11 @@ HTML = r"""<!doctype html>
       document.querySelectorAll("[data-tip-i18n]").forEach(node => { node.dataset.tip = t(node.dataset.tipI18n); });
       $("languageSelect").value = state.lang;
       $("languageSelect").title = t("switchLanguage");
+      document.querySelectorAll(".column-resize-handle").forEach(handle => {
+        const label = handle.parentElement.textContent.trim() || t("selectionColumn");
+        handle.setAttribute("aria-label", `${t("resizeColumn")}: ${label}`);
+        handle.title = `${t("resizeColumn")}: ${label}`;
+      });
       renderDepStatus();
       setRunning(state.running);
       renderModes();
@@ -954,7 +1032,7 @@ HTML = r"""<!doctype html>
       return payload;
     }
     function readConfig() {
-      const values = { lang: state.lang, mode: state.mode };
+      const values = { lang: state.lang, mode: state.mode, columnWidths: [...columnWidths] };
       const ids = ["format", "sortBy", "codec", "gpu", "gpuWorkers", "audioCodec", "qualityProfile", "crf", "preset", "fpsPolicy", "resolutionPolicy", "padColor", "outputDir", "tempDir", "ffmpegPath", "ffprobePath", "recursive", "overwrite", "dryRun", "keepTemp", "autoDownloadDeps", "notifyOnComplete", "playSoundOnComplete"];
       ids.forEach(id => {
         const node = $(id);
@@ -971,11 +1049,69 @@ HTML = r"""<!doctype html>
       if (config.lang && messages[config.lang]) state.lang = config.lang;
       if (config.mode) state.mode = config.mode;
       Object.entries(config).forEach(([id, value]) => {
+        if (id === "columnWidths") return;
         const node = $(id);
         if (!node) return;
         if (pathFields.includes(id)) node.dataset.custom = value ? "true" : "false";
         if (node.type === "checkbox") node.checked = Boolean(value);
         else node.value = value;
+      });
+      applyColumnWidths(config.columnWidths);
+    }
+    function applyColumnWidths(widths) {
+      const cols = Array.from($("videoColumns").children);
+      columnWidths = defaultColumnWidths.map((fallback, index) => {
+        const value = Array.isArray(widths) ? widths[index] : fallback;
+        return Number.isFinite(value) ? Math.max(minColumnWidths[index], Math.min(1200, Math.round(value))) : fallback;
+      });
+      cols.forEach((col, index) => { col.style.width = `${columnWidths[index]}px`; });
+      document.querySelectorAll(".column-resize-handle").forEach((handle, index) => {
+        handle.setAttribute("aria-valuemin", String(minColumnWidths[index]));
+        handle.setAttribute("aria-valuemax", "1200");
+        handle.setAttribute("aria-valuenow", String(columnWidths[index]));
+      });
+      $("videoTable").style.width = `${columnWidths.reduce((sum, width) => sum + width, 0)}px`;
+      $("videoTable").style.minWidth = "0";
+    }
+    function setColumnWidth(index, width) {
+      const next = [...columnWidths];
+      next[index] = width;
+      applyColumnWidths(next);
+    }
+    function installColumnResize() {
+      document.querySelectorAll(".column-resize-handle").forEach(handle => {
+        const index = Number(handle.dataset.column);
+        let startX = 0;
+        let startWidth = 0;
+        let activePointer = null;
+        handle.addEventListener("pointerdown", event => {
+          if (event.button !== 0) return;
+          event.preventDefault();
+          activePointer = event.pointerId;
+          startX = event.clientX;
+          startWidth = columnWidths[index];
+          handle.setPointerCapture(event.pointerId);
+          handle.classList.add("active");
+          document.body.classList.add("column-resizing");
+        });
+        handle.addEventListener("pointermove", event => {
+          if (event.pointerId === activePointer) setColumnWidth(index, startWidth + event.clientX - startX);
+        });
+        const finish = event => {
+          if (event.pointerId !== activePointer) return;
+          activePointer = null;
+          handle.classList.remove("active");
+          document.body.classList.remove("column-resizing");
+          scheduleSaveConfig();
+        };
+        handle.addEventListener("pointerup", finish);
+        handle.addEventListener("pointercancel", finish);
+        handle.addEventListener("keydown", event => {
+          if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+          event.preventDefault();
+          setColumnWidth(index, columnWidths[index] + (event.key === "ArrowRight" ? 1 : -1) * (event.shiftKey ? 24 : 8));
+          scheduleSaveConfig();
+        });
       });
     }
     async function loadConfig() {
@@ -1253,7 +1389,7 @@ HTML = r"""<!doctype html>
     }
     async function selectFolder(kind) {
       try {
-        const result = await api(`/pick-folder?kind=${kind}`);
+        const result = await api(`/pick-folder?kind=${kind}&lang=${encodeURIComponent(state.lang)}`);
         if (!result.path) {
           log(t("folderCancelled"));
           return;
@@ -1280,7 +1416,7 @@ HTML = r"""<!doctype html>
     }
     async function selectVideoFiles() {
       try {
-        const result = await api("/pick-files");
+        const result = await api(`/pick-files?lang=${encodeURIComponent(state.lang)}`);
         if (!result.paths || !result.paths.length) {
           log(t("filesCancelled"));
           return;
@@ -1558,6 +1694,8 @@ HTML = r"""<!doctype html>
         $("tooltip").style.display = "none";
       });
     });
+    applyColumnWidths();
+    installColumnResize();
     (async () => {
       await loadConfig();
       await refreshDefaultPaths();
@@ -1716,10 +1854,12 @@ def _make_handler(state: GuiState, api_token: str):
                 return
             if parsed.path == "/pick-folder":
                 kind = parse_qs(parsed.query).get("kind", ["source"])[0]
-                self._send_json({"path": _pick_folder(kind)})
+                lang = _dialog_language(parse_qs(parsed.query).get("lang", [""])[0])
+                self._send_json({"path": _pick_folder(kind, lang)})
                 return
             if parsed.path == "/pick-files":
-                paths = _pick_video_files()
+                lang = _dialog_language(parse_qs(parsed.query).get("lang", [""])[0])
+                paths = _pick_video_files(lang)
                 self._send_json(
                     {
                         "paths": paths,
@@ -1935,6 +2075,7 @@ def _make_handler(state: GuiState, api_token: str):
         def _send_html(self, content: str) -> None:
             content = (
                 content.replace("__APP_VERSION__", __version__)
+                .replace("__DEFAULT_LANG__", _system_ui_language())
                 .replace("__REPOSITORY_URL__", REPOSITORY_URL)
                 .replace("__API_TOKEN__", api_token)
             )
@@ -2536,19 +2677,57 @@ def _gui_logger(state: GuiState) -> logging.Logger:
     return logger
 
 
-def _pick_folder(kind: str) -> str:
-    titles = {
-        "output": "Select output folder",
-        "temp": "Select temp folder",
-        "source": "Select source video folder",
-    }
-    title = titles.get(kind, "Select folder")
+def _system_ui_language() -> str:
+    system = platform.system()
+    if system == "Windows":
+        try:
+            import ctypes
+
+            language_id = ctypes.windll.kernel32.GetUserDefaultUILanguage()
+            return "zh" if language_id & 0x3FF == 0x04 else "en"
+        except (AttributeError, OSError):
+            pass
+    if system == "Darwin":
+        try:
+            result = subprocess.run(
+                ["defaults", "read", "-g", "AppleLanguages"],
+                capture_output=True,
+                text=True,
+                timeout=2,
+                **subprocess_window_kwargs(),
+            )
+            if result.returncode == 0:
+                languages = re.findall(r"[A-Za-z]{2,3}(?:[-_][A-Za-z0-9]+)*", result.stdout)
+                if languages:
+                    return "zh" if languages[0].lower().startswith("zh") else "en"
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+    language = os.environ.get("LANGUAGE") or os.environ.get("LC_ALL") or os.environ.get("LC_MESSAGES")
+    if not language:
+        language = (locale.getlocale()[0] or os.environ.get("LANG") or "en")
+    return "zh" if language.lower().startswith("zh") else "en"
+
+
+def _picker_language(language: str) -> str:
+    return "zh" if language.lower().startswith("zh") else "en"
+
+
+def _dialog_language(requested_language: str) -> str:
+    # Native dialog chrome follows the OS; never give a Chinese shell English captions.
+    if _system_ui_language() == "zh":
+        return "zh"
+    return _picker_language(requested_language)
+
+
+def _pick_folder(kind: str, language: str = "en") -> str:
+    language = _picker_language(language)
+    title = PICKER_TEXT[language].get(kind, PICKER_TEXT[language]["folder"])
     if platform.system() == "Darwin":
         selected = _pick_folder_macos(title)
         _remember_picker_dir(kind, selected)
         return selected
     if platform.system() == "Windows":
-        selected = _pick_folder_windows(title, _last_picker_dir(kind))
+        selected = _pick_folder_windows(title, _last_picker_dir(kind), language)
         if selected is None:
             selected = _pick_folder_tk(title)
             _remember_picker_dir(kind, selected)
@@ -2560,17 +2739,18 @@ def _pick_folder(kind: str) -> str:
     return selected
 
 
-def _pick_video_files() -> list[str]:
-    title = "Select one or more source video files"
+def _pick_video_files(language: str = "en") -> list[str]:
+    language = _picker_language(language)
+    title = PICKER_TEXT[language]["files"]
     initial_dir = _last_picker_dir("source")
     if platform.system() == "Darwin":
         selected = _pick_video_files_macos(title)
     elif platform.system() == "Windows":
-        selected = _pick_video_files_windows(title, initial_dir)
+        selected = _pick_video_files_windows(title, initial_dir, language)
         if selected is None:
-            selected = _pick_video_files_tk(title, initial_dir)
+            selected = _pick_video_files_tk(title, initial_dir, language)
     else:
-        selected = _pick_video_files_tk(title, initial_dir)
+        selected = _pick_video_files_tk(title, initial_dir, language)
     normalized = _normalize_picked_video_files(selected or [])
     if normalized:
         _remember_picker_dir("source", normalized[0])
@@ -2659,9 +2839,12 @@ return output
     return []
 
 
-def _pick_video_files_windows(title: str, initial_dir: str | None = None) -> list[str] | None:
+def _pick_video_files_windows(title: str, initial_dir: str | None = None, language: str = "en") -> list[str] | None:
     escaped_title = title.replace("'", "''")
     escaped_initial = (initial_dir or "").replace("'", "''")
+    picker_text = PICKER_TEXT[_picker_language(language)]
+    escaped_video_filter = picker_text["video_filter"].replace("'", "''")
+    escaped_all_filter = picker_text["all_filter"].replace("'", "''")
     script = r'''
 Add-Type -AssemblyName System.Windows.Forms
 [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new()
@@ -2671,7 +2854,7 @@ $dialog.Title = '__TITLE__'
 $dialog.Multiselect = $true
 $dialog.CheckFileExists = $true
 $dialog.AutoUpgradeEnabled = $true
-$dialog.Filter = 'Video files|*.mp4;*.mkv;*.mov;*.avi;*.ts;*.m4v;*.flv;*.webm;*.wmv|All files (*.*)|*.*'
+$dialog.Filter = '__VIDEO_FILTER__|*.mp4;*.mkv;*.mov;*.avi;*.ts;*.m4v;*.flv;*.webm;*.wmv|__ALL_FILTER__|*.*'
 $initial = '__INITIAL_DIR__'
 if ($initial -and (Test-Path -LiteralPath $initial -PathType Container)) {
   $dialog.InitialDirectory = $initial
@@ -2679,7 +2862,9 @@ if ($initial -and (Test-Path -LiteralPath $initial -PathType Container)) {
 if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
   $dialog.FileNames | ForEach-Object { Write-Output $_ }
 }
-'''.replace("__TITLE__", escaped_title).replace("__INITIAL_DIR__", escaped_initial)
+'''.replace("__TITLE__", escaped_title).replace("__INITIAL_DIR__", escaped_initial).replace(
+        "__VIDEO_FILTER__", escaped_video_filter
+    ).replace("__ALL_FILTER__", escaped_all_filter)
     try:
         result = subprocess.run(
             ["powershell", "-NoProfile", "-STA", "-ExecutionPolicy", "Bypass", "-Command", script],
@@ -2697,7 +2882,7 @@ if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
     return None
 
 
-def _pick_video_files_tk(title: str, initial_dir: str | None = None) -> list[str]:
+def _pick_video_files_tk(title: str, initial_dir: str | None = None, language: str = "en") -> list[str]:
     try:
         import tkinter as tk
         from tkinter import filedialog
@@ -2706,12 +2891,13 @@ def _pick_video_files_tk(title: str, initial_dir: str | None = None) -> list[str
         root.withdraw()
         root.attributes("-topmost", True)
         root.update()
+        picker_text = PICKER_TEXT[_picker_language(language)]
         selected = filedialog.askopenfilenames(
             title=title,
             initialdir=initial_dir or None,
             filetypes=[
-                ("Video files", "*.mp4 *.mkv *.mov *.avi *.ts *.m4v *.flv *.webm *.wmv"),
-                ("All files", "*.*"),
+                (picker_text["video_filter"], "*.mp4 *.mkv *.mov *.avi *.ts *.m4v *.flv *.webm *.wmv"),
+                (picker_text["all_filter"], "*.*"),
             ],
             parent=root,
         )
@@ -2740,9 +2926,12 @@ def _pick_folder_macos(title: str) -> str:
     return ""
 
 
-def _pick_folder_windows(title: str, initial_dir: str | None = None) -> str | None:
+def _pick_folder_windows(title: str, initial_dir: str | None = None, language: str = "en") -> str | None:
     escaped_title = title.replace("'", "''")
     escaped_initial = (initial_dir or "").replace("'", "''")
+    picker_text = PICKER_TEXT[_picker_language(language)]
+    escaped_placeholder = picker_text["folder_placeholder"].replace("'", "''")
+    escaped_filter = picker_text["all_filter"].replace("'", "''")
     script = r"""
 Add-Type -AssemblyName System.Windows.Forms
 [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new()
@@ -2753,8 +2942,8 @@ $dialog.CheckFileExists = $false
 $dialog.ValidateNames = $false
 $dialog.DereferenceLinks = $true
 $dialog.AutoUpgradeEnabled = $true
-$dialog.Filter = 'All files (*.*)|*.*'
-$dialog.FileName = 'Select this folder'
+$dialog.Filter = '__ALL_FILTER__|*.*'
+$dialog.FileName = '__FOLDER_PLACEHOLDER__'
 $initial = '__INITIAL_DIR__'
 if (-not $initial -or -not (Test-Path -LiteralPath $initial -PathType Container)) {
   $initial = [Environment]::GetFolderPath('MyVideos')
@@ -2773,7 +2962,9 @@ if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
     Write-Output (Split-Path -Parent $selected)
   }
 }
-""".replace("__TITLE__", escaped_title).replace("__INITIAL_DIR__", escaped_initial)
+""".replace("__TITLE__", escaped_title).replace("__INITIAL_DIR__", escaped_initial).replace(
+        "__ALL_FILTER__", escaped_filter
+    ).replace("__FOLDER_PLACEHOLDER__", escaped_placeholder)
     try:
         result = subprocess.run(
             ["powershell", "-NoProfile", "-STA", "-ExecutionPolicy", "Bypass", "-Command", script],
@@ -2796,7 +2987,7 @@ def _normalize_picked_folder(path_text: str) -> str:
     if not path_text:
         return ""
     path = Path(path_text)
-    if path.name == "Select this folder":
+    if path.name in {text["folder_placeholder"] for text in PICKER_TEXT.values()}:
         return str(path.parent)
     if path.exists() and path.is_file():
         return str(path.parent)
