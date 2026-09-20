@@ -84,12 +84,17 @@ class GuiCancelTests(unittest.TestCase):
         self.assertIn("state.visualOrientations.get(file.path) || file.orientation", HTML)
         self.assertIn("/status?after=${state.logCursor}", HTML)
 
-    def test_video_table_has_resizable_persisted_columns(self) -> None:
+    def test_video_table_has_discoverable_content_aware_resizing(self) -> None:
         self.assertEqual(len(re.findall('class="column-resize-handle"', HTML)), 10)
         self.assertIn('id="videoColumns"', HTML)
+        self.assertIn('class="column-resize-hint-icon"', HTML)
         self.assertIn('handle.setPointerCapture(event.pointerId)', HTML)
+        self.assertIn('handle.addEventListener("dblclick"', HTML)
         self.assertIn('event.key === "ArrowRight"', HTML)
-        self.assertIn('columnWidths: [...columnWidths]', HTML)
+        self.assertIn('function naturalColumnWidth(index)', HTML)
+        self.assertIn('if (index === filenameColumnIndex)', HTML)
+        self.assertIn('columnWidths: { ...columnWidthOverrides }', HTML)
+        self.assertIn('if (!value || Array.isArray(value)', HTML)
 
 
 if __name__ == "__main__":

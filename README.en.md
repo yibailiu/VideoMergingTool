@@ -20,7 +20,7 @@
 
 VideoMergingTool helps you combine video clips into longer videos without uploading your files anywhere. It is designed for everyday desktop use: install the app, choose a folder or specific video files, review the detected videos, pick a merge mode, and start.
 
-Current `dev` branch version: `5.3.0`. Check the [Releases page](https://github.com/yibailiu/VideoMergingTool/releases) to see which installer versions have been published.
+Current `dev` branch version: `5.3.1`. Check the [Releases page](https://github.com/yibailiu/VideoMergingTool/releases) to see which installer versions have been published.
 
 The packaged Windows and macOS apps include FFmpeg and FFprobe, so normal users do not need to install FFmpeg manually.
 
@@ -31,7 +31,7 @@ The packaged Windows and macOS apps include FFmpeg and FFprobe, so normal users 
 
 - Scans a folder or lets you select one or more specific videos; supports `mp4`, `mkv`, `mov`, `avi`, `ts`, `m4v`, `flv`, `webm`, and `wmv`
 - Shows useful details such as duration, resolution, codec, FPS, and status
-- Lets you drag video-table header boundaries to resize columns; widths are saved for the next launch
+- Auto-sizes every video-table column except the filename to fit its content; visible header grips support custom resizing, double-click restores automatic sizing, and widths are saved for the next launch
 - Localizes file and folder picker captions and filters; Chinese systems prefer Chinese text
 - Opens a source in the system video player and lets you mark rotation or exclusion without modifying the source file or list order
 - Merges videos in a predictable order, with common sorting options

@@ -282,6 +282,26 @@ HTML = r"""<!doctype html>
       color: var(--text-muted);
       white-space: nowrap;
     }
+    .column-resize-hint {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      margin-top: 4px;
+      color: var(--accent-blue);
+      font-size: 11px;
+      white-space: nowrap;
+    }
+    .column-resize-hint-icon {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 18px;
+      height: 18px;
+      border: 1px solid rgba(52,152,219,.45);
+      border-radius: 5px;
+      background: rgba(52,152,219,.10);
+      font: 700 13px/1 var(--font-mono);
+    }
     table { width: 100%; min-width: 800px; border-collapse: collapse; table-layout: fixed; }
     th {
       position: sticky;
@@ -307,26 +327,49 @@ HTML = r"""<!doctype html>
     .column-resize-handle {
       position: absolute;
       top: 0;
-      right: 0;
+      right: -7px;
       bottom: 0;
       z-index: 3;
-      width: 10px;
+      width: 14px;
       cursor: col-resize;
       touch-action: none;
+      outline: none;
     }
-    .column-resize-handle::after {
+    .column-resize-handle::before {
       content: "";
       position: absolute;
-      top: 7px;
-      bottom: 7px;
-      left: 4px;
-      width: 2px;
+      top: 5px;
+      bottom: 5px;
+      left: 6px;
+      width: 1px;
       border-radius: 1px;
-      background: transparent;
+      background: var(--border-focus);
     }
+    .column-resize-handle::after {
+      content: "⋮";
+      position: absolute;
+      top: 50%;
+      left: 1px;
+      width: 12px;
+      padding-bottom: 1px;
+      transform: translateY(-50%);
+      border: 1px solid var(--border-focus);
+      border-radius: 4px;
+      background: var(--bg-panel);
+      color: var(--text-muted);
+      font: 700 12px/14px var(--font-mono);
+      text-align: center;
+    }
+    .column-resize-handle:hover::before,
+    .column-resize-handle:focus-visible::before,
+    .column-resize-handle.active::before { width: 2px; background: var(--accent-blue); }
     .column-resize-handle:hover::after,
     .column-resize-handle:focus-visible::after,
-    .column-resize-handle.active::after { background: var(--accent-red); }
+    .column-resize-handle.active::after {
+      border-color: var(--accent-blue);
+      color: var(--accent-blue);
+      box-shadow: 0 0 0 2px rgba(52,152,219,.12);
+    }
     body.column-resizing, body.column-resizing * {
       cursor: col-resize !important;
       user-select: none !important;
@@ -340,6 +383,10 @@ HTML = r"""<!doctype html>
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
+    }
+    .file-row td:not(:nth-child(2)) {
+      overflow: visible;
+      text-overflow: clip;
     }
     .mono { font-family: var(--font-mono); }
     .group-row td {
@@ -704,9 +751,10 @@ HTML = r"""<!doctype html>
           <div>
             <div class="label-micro selection-count" id="selectionCount"></div>
             <div class="hint" data-i18n="visualGroupingHint">Orientation groups are visual only; merge order still follows the selected global sort.</div>
+            <div class="column-resize-hint"><span class="column-resize-hint-icon" aria-hidden="true">↔</span><span data-i18n="columnResizeHint">Drag a header grip to resize; double-click to restore automatic width.</span></div>
           </div>
         </div>
-        <div class="table-wrap">
+        <div class="table-wrap" id="tableWrap">
           <table id="videoTable">
             <colgroup id="videoColumns">
               <col style="width: 46px">
@@ -824,7 +872,7 @@ HTML = r"""<!doctype html>
     const messages = {
       en: {
         ffmpegNotChecked: "! FFmpeg Not Checked", ffmpegChecking: "... Checking FFmpeg", ffmpegInstalled: "✓ FFmpeg Installed", ffmpegMissing: "! FFmpeg Missing", refreshFfmpeg: "Refresh FFmpeg check",
-        sourceFiles: "Source Files", noFolderSelected: "No folder or files selected", selectFolder: "Select Folder", selectFiles: "Select Files", filename: "Filename", resolution: "Resolution", codec: "Codec", duration: "Dur", mediaCreatedTime: "Media Created", fileSize: "Size", status: "Status", actions: "Actions", selectionColumn: "Selection", resizeColumn: "Resize column",
+        sourceFiles: "Source Files", noFolderSelected: "No folder or files selected", selectFolder: "Select Folder", selectFiles: "Select Files", filename: "Filename", resolution: "Resolution", codec: "Codec", duration: "Dur", mediaCreatedTime: "Media Created", fileSize: "Size", status: "Status", actions: "Actions", selectionColumn: "Selection", resizeColumn: "Resize column", resetColumnWidth: "Double-click to restore automatic width", columnResizeHint: "Drag a header grip to resize; double-click to restore automatic width.",
         processConsole: "Process Console", configuration: "Configuration", mergeStrategy: "Merge Strategy", outputSettings: "Output Settings", browse: "Browse",
         fastMerge: "Fast Merge", optimalMerge: "Optimal Merge", extremeMerge: "Extreme Merge", lossless: "Lossless", smart: "Smart", bruteForce: "Brute Force",
         fastDesc: "Stream copy only. Skips incompatible groups.", optimalDesc: "Groups by orientation and transcodes when needed.", extremeDesc: "Normalizes all files into one output.",
@@ -882,7 +930,7 @@ HTML = r"""<!doctype html>
       },
       zh: {
         ffmpegNotChecked: "! FFmpeg 未检查", ffmpegChecking: "... 正在检查 FFmpeg", ffmpegInstalled: "✓ FFmpeg 已安装", ffmpegMissing: "! FFmpeg 缺失", refreshFfmpeg: "重新检查 FFmpeg",
-        sourceFiles: "源文件", noFolderSelected: "未选择文件夹或视频", selectFolder: "选择文件夹", selectFiles: "选择文件", filename: "文件名", resolution: "分辨率", codec: "编码", duration: "时长", mediaCreatedTime: "创建媒体日期", fileSize: "大小", status: "状态", actions: "操作", selectionColumn: "选择", resizeColumn: "调整列宽",
+        sourceFiles: "源文件", noFolderSelected: "未选择文件夹或视频", selectFolder: "选择文件夹", selectFiles: "选择文件", filename: "文件名", resolution: "分辨率", codec: "编码", duration: "时长", mediaCreatedTime: "创建媒体日期", fileSize: "大小", status: "状态", actions: "操作", selectionColumn: "选择", resizeColumn: "调整列宽", resetColumnWidth: "双击恢复自适应宽度", columnResizeHint: "拖动表头的 ⋮ 调整列宽；双击恢复自适应宽度。",
         processConsole: "处理控制台", configuration: "配置", mergeStrategy: "合并策略", outputSettings: "输出设置", browse: "浏览",
         fastMerge: "快速合并", optimalMerge: "智能合并", extremeMerge: "强制合并", lossless: "无损", smart: "智能", bruteForce: "强制",
         fastDesc: "仅使用流复制，跳过不兼容分组。", optimalDesc: "按横竖屏分组，必要时转码。", extremeDesc: "统一所有文件到一个输出。",
@@ -958,9 +1006,14 @@ HTML = r"""<!doctype html>
       defaults: {}
     };
     const pathFields = ["outputDir", "tempDir", "ffmpegPath", "ffprobePath"];
-    const defaultColumnWidths = [46, 180, 95, 100, 65, 75, 140, 75, 90, 76];
-    const minColumnWidths = [36, 100, 75, 80, 50, 60, 105, 60, 75, 70];
+    const defaultColumnWidths = [46, 180, 95, 100, 65, 75, 140, 75, 110, 76];
+    const minColumnWidths = [46, 140, 68, 76, 52, 58, 104, 58, 76, 76];
+    const filenameColumnIndex = 1;
     let columnWidths = [...defaultColumnWidths];
+    let columnWidthOverrides = {};
+    let columnFitFrame = null;
+    const textMeasureCanvas = document.createElement("canvas");
+    const textMeasureContext = textMeasureCanvas.getContext("2d");
     const $ = (id) => document.getElementById(id);
     const t = (key, values = {}) => {
       let text = (messages[state.lang] && messages[state.lang][key]) || messages.en[key] || key;
@@ -976,13 +1029,14 @@ HTML = r"""<!doctype html>
       document.querySelectorAll(".column-resize-handle").forEach(handle => {
         const label = handle.parentElement.textContent.trim() || t("selectionColumn");
         handle.setAttribute("aria-label", `${t("resizeColumn")}: ${label}`);
-        handle.title = `${t("resizeColumn")}: ${label}`;
+        handle.title = `${t("resizeColumn")}: ${label}. ${t("resetColumnWidth")}`;
       });
       renderDepStatus();
       setRunning(state.running);
       renderModes();
       if (state.files.length) renderFiles(state.files);
       else updateSelectionControls();
+      scheduleColumnFit();
       if (!state.files.length && !state.inputDir) $("summary").textContent = t("noFolderSelected");
     }
     function renderDepStatus() {
@@ -1032,7 +1086,7 @@ HTML = r"""<!doctype html>
       return payload;
     }
     function readConfig() {
-      const values = { lang: state.lang, mode: state.mode, columnWidths: [...columnWidths] };
+      const values = { lang: state.lang, mode: state.mode, columnWidths: { ...columnWidthOverrides } };
       const ids = ["format", "sortBy", "codec", "gpu", "gpuWorkers", "audioCodec", "qualityProfile", "crf", "preset", "fpsPolicy", "resolutionPolicy", "padColor", "outputDir", "tempDir", "ffmpegPath", "ffprobePath", "recursive", "overwrite", "dryRun", "keepTemp", "autoDownloadDeps", "notifyOnComplete", "playSoundOnComplete"];
       ids.forEach(id => {
         const node = $(id);
@@ -1056,14 +1110,60 @@ HTML = r"""<!doctype html>
         if (node.type === "checkbox") node.checked = Boolean(value);
         else node.value = value;
       });
-      applyColumnWidths(config.columnWidths);
+      columnWidthOverrides = normalizeColumnWidthOverrides(config.columnWidths);
+      scheduleColumnFit(true);
     }
-    function applyColumnWidths(widths) {
-      const cols = Array.from($("videoColumns").children);
-      columnWidths = defaultColumnWidths.map((fallback, index) => {
-        const value = Array.isArray(widths) ? widths[index] : fallback;
-        return Number.isFinite(value) ? Math.max(minColumnWidths[index], Math.min(1200, Math.round(value))) : fallback;
+    function normalizeColumnWidthOverrides(value) {
+      if (!value || Array.isArray(value) || typeof value !== "object") return {};
+      return Object.fromEntries(
+        Object.entries(value)
+          .map(([index, width]) => [String(Number(index)), Number(width)])
+          .filter(([index, width]) => Number.isInteger(Number(index)) && Number(index) >= 0 && Number(index) < defaultColumnWidths.length && Number.isFinite(width))
+      );
+    }
+    function measureNodeText(node) {
+      if (!node || !textMeasureContext) return 0;
+      const text = (node.textContent || "").replace(/\s+/g, " ").trim();
+      if (!text) return 0;
+      const style = getComputedStyle(node);
+      textMeasureContext.font = `${style.fontStyle} ${style.fontWeight} ${style.fontSize} ${style.fontFamily}`;
+      return Math.ceil(textMeasureContext.measureText(text).width);
+    }
+    function naturalColumnWidth(index) {
+      if (index === 0) return minColumnWidths[0];
+      if (index === filenameColumnIndex) return minColumnWidths[index];
+      const header = $("videoTable").querySelector(`thead th:nth-child(${index + 1})`);
+      const label = header ? header.querySelector(":scope > span:not(.column-resize-handle)") : null;
+      let width = measureNodeText(label || header) + 38;
+      $("fileRows").querySelectorAll(`tr.file-row td:nth-child(${index + 1})`).forEach(cell => {
+        const content = cell.querySelector(".file-actions") || cell;
+        width = Math.max(width, measureNodeText(content) + 24);
       });
+      return Math.max(minColumnWidths[index], Math.ceil(width));
+    }
+    function calculateColumnWidths() {
+      const widths = defaultColumnWidths.map((fallback, index) => {
+        if (index === filenameColumnIndex) return minColumnWidths[index];
+        const natural = naturalColumnWidth(index);
+        const override = Number(columnWidthOverrides[index]);
+        return Math.min(1200, Math.max(natural, Number.isFinite(override) ? override : 0));
+      });
+      const available = Math.max(0, $("tableWrap").clientWidth - 2);
+      const otherWidth = widths.reduce((sum, width, index) => index === filenameColumnIndex ? sum : sum + width, 0);
+      const filenameOverride = Number(columnWidthOverrides[filenameColumnIndex]);
+      widths[filenameColumnIndex] = Math.min(
+        1200,
+        Math.max(
+          minColumnWidths[filenameColumnIndex],
+          available - otherWidth,
+          Number.isFinite(filenameOverride) ? filenameOverride : 0
+        )
+      );
+      return widths.map(width => Math.round(width));
+    }
+    function applyColumnWidths(widths, resetScroll = false) {
+      const cols = Array.from($("videoColumns").children);
+      columnWidths = widths;
       cols.forEach((col, index) => { col.style.width = `${columnWidths[index]}px`; });
       document.querySelectorAll(".column-resize-handle").forEach((handle, index) => {
         handle.setAttribute("aria-valuemin", String(minColumnWidths[index]));
@@ -1072,11 +1172,26 @@ HTML = r"""<!doctype html>
       });
       $("videoTable").style.width = `${columnWidths.reduce((sum, width) => sum + width, 0)}px`;
       $("videoTable").style.minWidth = "0";
+      if (resetScroll) $("tableWrap").scrollLeft = 0;
+    }
+    function fitColumnsToContent(resetScroll = false) {
+      applyColumnWidths(calculateColumnWidths(), resetScroll);
+    }
+    function scheduleColumnFit(resetScroll = false) {
+      if (columnFitFrame !== null) cancelAnimationFrame(columnFitFrame);
+      columnFitFrame = requestAnimationFrame(() => {
+        columnFitFrame = null;
+        fitColumnsToContent(resetScroll);
+      });
     }
     function setColumnWidth(index, width) {
-      const next = [...columnWidths];
-      next[index] = width;
-      applyColumnWidths(next);
+      columnWidthOverrides[index] = Math.max(minColumnWidths[index], Math.min(1200, Math.round(width)));
+      fitColumnsToContent();
+    }
+    function resetColumnWidth(index) {
+      delete columnWidthOverrides[index];
+      fitColumnsToContent();
+      scheduleSaveConfig();
     }
     function installColumnResize() {
       document.querySelectorAll(".column-resize-handle").forEach(handle => {
@@ -1106,6 +1221,10 @@ HTML = r"""<!doctype html>
         };
         handle.addEventListener("pointerup", finish);
         handle.addEventListener("pointercancel", finish);
+        handle.addEventListener("dblclick", event => {
+          event.preventDefault();
+          resetColumnWidth(index);
+        });
         handle.addEventListener("keydown", event => {
           if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
           event.preventDefault();
@@ -1113,6 +1232,7 @@ HTML = r"""<!doctype html>
           scheduleSaveConfig();
         });
       });
+      window.addEventListener("resize", () => scheduleColumnFit());
     }
     async function loadConfig() {
       try { applyConfig(await api("/config")); } catch (error) { log(`ERROR: ${error.message}`); }
@@ -1343,6 +1463,7 @@ HTML = r"""<!doctype html>
       });
       updateSelectionControls();
       updatePlan();
+      scheduleColumnFit();
     }
     function planPayload() {
       return {
@@ -1694,7 +1815,7 @@ HTML = r"""<!doctype html>
         $("tooltip").style.display = "none";
       });
     });
-    applyColumnWidths();
+    fitColumnsToContent();
     installColumnResize();
     (async () => {
       await loadConfig();
