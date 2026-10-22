@@ -20,11 +20,13 @@
 
 VideoMergingTool 用来把一个文件夹里的多个视频批量合并成更长的视频。它面向普通桌面用户设计：安装应用，选择视频文件夹，确认识别结果，选择合并模式，然后开始合并。
 
+当前开发版本为 `6.0.0`，使用 Vue 3、Element Plus 和 AG Grid Community 重构界面，支持直接选择文件、视频抽检和损坏时跳过继续。最新完整说明见 [中文首页](README.md) 和 [6.0.0 说明](docs/6.0.0.md)。
+
 Windows 和 macOS 安装包已经内置 FFmpeg / FFprobe，普通用户不需要手动安装 FFmpeg，也不需要配置环境变量。
 
 ## 它能做什么
 <p align="center">
-  <img src="assets/screenshots/screenshot_zhCN.png" width="960" alt="VideoMergingTool 图标">
+  <img src="assets/screenshots/screenshot_6_zhCN.png" width="960" alt="VideoMergingTool 6.0.0 视频工作区与任务结果">
 </p>
 
 - 扫描文件夹中的常见视频格式，包括 `mp4`、`mkv`、`mov`、`avi`、`ts`、`m4v`、`flv`、`webm`
@@ -44,8 +46,7 @@ Windows 和 macOS 安装包已经内置 FFmpeg / FFprobe，普通用户不需要
 | 系统 | 下载文件 | 安装方式 |
 | --- | --- | --- |
 | Windows | `VideoMergingTool-Setup.exe` | 运行安装包，然后从开始菜单或桌面图标打开。 |
-| macOS Apple 芯片 | `VideoMergingTool-macos-apple-silicon.dmg` | 打开 DMG，将应用拖入“应用程序”。 |
-| macOS Intel | `VideoMergingTool-macos-intel.dmg` | 打开 DMG，将应用拖入“应用程序”。 |
+| macOS（Apple 芯片 / Intel 通用） | `VideoMergingTool-macos-universal.dmg` | 打开 DMG，将应用拖入“应用程序”。 |
 | Linux | `VideoMergingTool` | 下载可执行文件后直接运行。 |
 
 ## 快速开始
@@ -78,6 +79,8 @@ Windows 和 macOS 安装包已经内置 FFmpeg / FFprobe，普通用户不需要
 | --- | --- | --- |
 | Source Folder / 源文件夹 | `input_dir` | 包含待合并视频的文件夹。 |
 | Merge Mode / 合并模式 | `--mode fast\|optimal\|extreme` | 选择合并策略。不确定时建议使用 `optimal`。 |
+| 开始前检查 | `--check-level basic\|quick\|full` | 默认快速抽检；完整检查解码全段，抽检不能保证未覆盖位置完好。 |
+| 损坏视频处理 | `--on-error stop\|skip` | 默认停止；跳过仅适用于确认损坏的输入，权限、磁盘等任务级错误仍会停止。 |
 | Output Folder / 输出目录 | `--output-dir PATH` | 合并后视频的保存位置。默认会使用源文件夹下的 `merged` 文件夹。 |
 | Output Format / 输出格式 | `--output-format mp4\|mkv\|mov\|avi\|ts\|webm` | 输出文件容器格式。大多数场景建议使用 `mp4`。 |
 | Output Filename Prefix / 输出文件名前缀 | `--name TEXT` | 自定义输出文件名，不包含扩展名。 |
@@ -143,6 +146,8 @@ VideoMergingTool merge /path/to/videos --mode optimal
 源码运行主要用于测试和开发：
 
 ```bash
+npm --prefix frontend ci
+npm --prefix frontend run build
 python main.py gui
 python main.py merge /path/to/videos --mode optimal
 ```

@@ -20,13 +20,15 @@
 
 VideoMergingTool helps you combine video clips into longer videos without uploading your files anywhere. It is designed for everyday desktop use: install the app, choose a folder or specific video files, review the detected videos, pick a merge mode, and start.
 
-Current `dev` branch version: `5.3.1`. Check the [Releases page](https://github.com/yibailiu/VideoMergingTool/releases) to see which installer versions have been published.
+Current development version: `6.0.0`. Check the [Releases page](https://github.com/yibailiu/VideoMergingTool/releases) to see which installer versions have been published.
+
+Version 6 rebuilds the desktop UI with Vue 3, Element Plus, and AG Grid Community. It adds sampled/full input checks and an explicit stop-or-skip policy for damaged videos. See [6.0.0 notes](docs/6.0.0.md) for architecture and development details.
 
 The packaged Windows and macOS apps include FFmpeg and FFprobe, so normal users do not need to install FFmpeg manually.
 
 ## What It Does
 <p align="center">
-  <img src="assets/screenshots/screenshot_en.png" width="960" alt="VideoMergingTool 图标">
+  <img src="assets/screenshots/screenshot_6_en.png" width="960" alt="VideoMergingTool 6.0.0 workspace and task result">
 </p>
 
 - Scans a folder or lets you select one or more specific videos; supports `mp4`, `mkv`, `mov`, `avi`, `ts`, `m4v`, `flv`, `webm`, and `wmv`
@@ -39,6 +41,8 @@ The packaged Windows and macOS apps include FFmpeg and FFprobe, so normal users 
 - Keeps the original picture visible when resizing is needed; it pads instead of cropping
 - Lets you choose output folder, temp folder, language, merge mode, GPU option, and whether to keep temp files
 - Shows complete process logs and progress inside the app window
+- Offers metadata, sampled, or full decode checks before merging; a sampled pass does not guarantee the entire video is undamaged
+- Can stop on damaged inputs or skip them and continue, with a partial-completion result, skipped-file reasons, and full log export
 - Runs locally in a desktop window, without opening an external browser
 
 ## Download
@@ -48,15 +52,14 @@ Go to the [Releases page](https://github.com/yibailiu/VideoMergingTool/releases)
 | System | File to download | How to install |
 | --- | --- | --- |
 | Windows | `VideoMergingTool-Setup.exe` | Run the installer, then open the app from Start Menu or the desktop shortcut. |
-| macOS Apple Silicon | `VideoMergingTool-macos-apple-silicon.dmg` | Open the DMG and drag the app into Applications. |
-| macOS Intel | `VideoMergingTool-macos-intel.dmg` | Open the DMG and drag the app into Applications. |
+| macOS (Apple Silicon / Intel universal) | `VideoMergingTool-macos-universal.dmg` | Open the DMG and drag the app into Applications. |
 | Linux | `VideoMergingTool` | Download the executable and run it directly. |
 
 ## Quick Start
 
 1. Open VideoMergingTool.
 2. Click **Select Folder** to scan a whole folder, or **Select Files** to add only the videos you choose.
-3. Confirm the detected files and merge order. Landscape/portrait groups are visual only; the merge uses one global sort order. Drag a header boundary to resize its column.
+3. Confirm the detected files and merge order. Landscape/portrait groups are visual only; the merge uses one global sort order. Drag a header boundary to resize its column. Choose input checks and failure handling; the defaults are quick sampling and stop on failure.
 4. Choose a merge mode:
    - **Fast Merge** for compatible files when you want the fastest lossless merge.
    - **Optimal Merge** for mixed landscape or portrait files in most normal cases.
@@ -106,6 +109,8 @@ Most users can use the desktop controls without typing any command. The table be
 | FFmpeg Path | `--ffmpeg-path PATH` | Optional manual path to `ffmpeg`. Packaged apps normally use the bundled copy. |
 | FFprobe Path | `--ffprobe-path PATH` | Optional manual path to `ffprobe`. Packaged apps normally use the bundled copy. |
 | Auto Download Deps | `--auto-download-deps` / `--no-auto-download-deps` | Source runs can download FFmpeg when missing. Packaged apps already include it. |
+| Input Check | `--check-level basic\|quick\|full` | Defaults to sampled checks. Full checks decode the entire input; sampling cannot guarantee integrity outside the checked regions. |
+| Damaged Input Policy | `--on-error stop\|skip` | Defaults to stop. Skip applies only to confirmed damaged inputs; task-level errors such as permissions or disk failures still stop processing. |
 
 Sort order values:
 
@@ -149,6 +154,8 @@ VideoMergingTool merge /path/to/videos --mode optimal
 Source runs are intended for testing and development:
 
 ```bash
+npm --prefix frontend ci
+npm --prefix frontend run build
 python main.py gui
 python main.py merge /path/to/videos --mode optimal
 ```

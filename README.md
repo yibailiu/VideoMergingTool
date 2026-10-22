@@ -20,13 +20,15 @@
 
 VideoMergingTool 用来把多个视频批量合并成更长的视频。它面向普通桌面用户设计：安装应用，选择视频文件夹或直接选择若干视频，确认识别结果，选择合并模式，然后开始合并。
 
-当前 `dev` 分支版本：`5.3.1`。正式安装包是否已发布，请以 [Releases 页面](https://github.com/yibailiu/VideoMergingTool/releases) 为准。
+当前开发版本：`6.0.0`。正式安装包是否已发布，请以 [Releases 页面](https://github.com/yibailiu/VideoMergingTool/releases) 为准。
+
+6.0.0 使用 Vue 3、Element Plus 与 AG Grid Community 重构桌面界面，并增加视频快速抽检、完整解码检查，以及“损坏时停止／跳过继续”的任务策略。详细行为和开发说明见 [6.0.0 说明](docs/6.0.0.md)。
 
 Windows 和 macOS 安装包已经内置 FFmpeg / FFprobe，普通用户不需要手动安装 FFmpeg，也不需要配置环境变量。
 
 ## 它能做什么
 <p align="center">
-  <img src="assets/screenshots/screenshot_zhCN.png" width="960" alt="VideoMergingTool 图标">
+  <img src="assets/screenshots/screenshot_6_zhCN.png" width="960" alt="VideoMergingTool 6.0.0 视频工作区与任务结果">
 </p>
 
 - 扫描文件夹或直接选择一个、多个视频；支持 `mp4`、`mkv`、`mov`、`avi`、`ts`、`m4v`、`flv`、`webm`、`wmv`
@@ -39,6 +41,8 @@ Windows 和 macOS 安装包已经内置 FFmpeg / FFprobe，普通用户不需要
 - 需要统一画面尺寸时，会补边而不是裁切，尽量保留完整画面
 - 可设置输出目录、临时目录、界面语言、合并模式、GPU 选项、是否保留临时文件
 - 在应用窗口内显示完整的处理日志和进度
+- 开始前可选择基础检查、快速抽检或完整解码检查；快速抽检通过不代表整个文件无损坏
+- 损坏视频可选择停止任务或跳过继续；完成后显示输出文件、跳过清单和原因，并可导出完整日志
 - 作为桌面应用运行，不依赖浏览器打开
 
 ## 下载
@@ -48,15 +52,14 @@ Windows 和 macOS 安装包已经内置 FFmpeg / FFprobe，普通用户不需要
 | 系统 | 下载文件 | 安装方式 |
 | --- | --- | --- |
 | Windows | `VideoMergingTool-Setup.exe` | 运行安装包，然后从开始菜单或桌面图标打开。 |
-| macOS Apple 芯片 | `VideoMergingTool-macos-apple-silicon.dmg` | 打开 DMG，将应用拖入“应用程序”。 |
-| macOS Intel | `VideoMergingTool-macos-intel.dmg` | 打开 DMG，将应用拖入“应用程序”。 |
+| macOS（Apple 芯片 / Intel 通用） | `VideoMergingTool-macos-universal.dmg` | 打开 DMG，将应用拖入“应用程序”。 |
 | Linux | `VideoMergingTool` | 下载可执行文件后直接运行。 |
 
 ## 快速开始
 
 1. 打开 VideoMergingTool。
 2. 点击 **Select Folder / 选择文件夹** 扫描整个文件夹，或点击 **Select Files / 选择文件** 只添加指定的一个或多个视频。
-3. 等待应用识别视频，并检查文件顺序。横竖分组仅用于查看，合并仍按统一排序规则执行；可拖动表头边界调整列宽。
+3. 等待应用识别视频，并检查文件顺序。横竖分组仅用于查看，合并仍按统一排序规则执行；可拖动表头边界调整列宽。选择开始前检查和损坏视频处理策略，默认快速抽检、遇错停止。
 4. 选择合并模式：
    - **Fast Merge**：适合同一设备、同一参数导出的视频，速度最快，尽量无损。
    - **Optimal Merge**：适合大多数日常场景，兼顾速度、兼容性和画面方向。
@@ -84,6 +87,8 @@ WMV 等源视频如果使用了 MP4 不支持的音频编码，**Optimal Merge**
 | --- | --- | --- |
 | Source Folder / 源文件夹 | `input_dir` | 包含待合并视频的文件夹；界面的“选择文件”只处理指定文件。 |
 | Merge Mode / 合并模式 | `--mode fast\|optimal\|extreme` | 选择合并策略。不确定时建议使用 `optimal`。 |
+| 开始前检查 | `--check-level basic\|quick\|full` | 默认快速抽检；完整检查解码全段，抽检不能保证未覆盖位置完好。 |
+| 损坏视频处理 | `--on-error stop\|skip` | 默认停止；跳过仅适用于确认损坏的输入，权限、磁盘等任务级错误仍会停止。 |
 | Output Folder / 输出目录 | `--output-dir PATH` | 合并后视频的保存位置。默认会使用源文件夹下的 `merged` 文件夹。 |
 | Output Format / 输出格式 | `--output-format mp4\|mkv\|mov\|avi\|ts\|webm` | 输出文件容器格式。大多数场景建议使用 `mp4`。 |
 | Output Filename Prefix / 输出文件名前缀 | `--name TEXT` | 自定义输出文件名，不包含扩展名。 |
@@ -149,6 +154,8 @@ VideoMergingTool merge /path/to/videos --mode optimal
 源码运行主要用于测试和开发：
 
 ```bash
+npm --prefix frontend ci
+npm --prefix frontend run build
 python main.py gui
 python main.py merge /path/to/videos --mode optimal
 ```
