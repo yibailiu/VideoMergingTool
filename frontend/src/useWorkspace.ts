@@ -12,6 +12,9 @@ import { mergeOrderedFiles } from "./ordering";
 import type { Issue, MediaFile, Plan, Settings, TaskResult } from "./types";
 
 export function useWorkspace() {
+  const fullLogText = ref("");
+  const logDialogVisible = ref(false);
+  const copyingLogs = ref(false);
   const settings = reactive<Settings>({
     lang: window.__VMT__.lang || "zh",
     mode: "optimal",
@@ -257,19 +260,38 @@ export function useWorkspace() {
   function excludeScanIssue(path: string) {
     scanIssues.value = scanIssues.value.filter((issue) => issue.path !== path);
   }
-  async function exportLogs() {
+  async function showFullLogs() {
     try {
       const data = await api("/logs");
-      const url = URL.createObjectURL(
-        new Blob([data.logs.join("\n")], { type: "text/plain;charset=utf-8" }),
-      );
-      const link = document.createElement("a");
-      link.href = url;
-      link.download = "VideoMergingTool.log";
-      link.click();
-      URL.revokeObjectURL(url);
+      fullLogText.value = data.text;
+      logDialogVisible.value = true;
     } catch (error) {
       failure(error);
+    }
+  }
+  async function copyLogs() {
+    copyingLogs.value = true;
+    try {
+      const data = await api("/copy-logs", {});
+      if (data.copied) {
+        ElMessage.success(
+          t("完整日志已复制到剪贴板", "Full log copied to clipboard"),
+        );
+      } else {
+        fullLogText.value = data.text;
+        logDialogVisible.value = true;
+        ElMessage.warning(
+          t(
+            "系统复制失败，请在完整日志中按 Ctrl+A / Ctrl+C（Mac 使用 ⌘）复制。",
+            "System copy failed. Select and copy from the full log view (Ctrl+A / Ctrl+C, or ⌘ on Mac).",
+          ),
+        );
+      }
+    } catch (error) {
+      failure(error);
+      await showFullLogs();
+    } finally {
+      copyingLogs.value = false;
     }
   }
   async function poll() {
@@ -387,7 +409,11 @@ export function useWorkspace() {
     start,
     cancel,
     checkDeps,
-    exportLogs,
+    copyLogs,
+    showFullLogs,
+    fullLogText,
+    logDialogVisible,
+    copyingLogs,
     retryFailures,
     excludeScanIssue,
   };

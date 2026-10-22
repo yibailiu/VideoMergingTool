@@ -20,6 +20,10 @@
   --el-text-color-regular: #b1bfd4;
   --el-color-success: #75c9a1;
   --el-color-warning: #e7b56f;
+  --settings-width: 332px;
+  --workspace-gutter: 24px;
+  --settings-gutter: 22px;
+  --workspace-columns: minmax(0, 1fr) var(--settings-width);
 }
 * {
   box-sizing: border-box;
@@ -53,7 +57,8 @@ h3 {
 }
 .app-shell {
   height: 100vh;
-  min-height: 580px;
+  height: 100dvh;
+  min-height: 0;
   display: flex;
   flex-direction: column;
 }
@@ -78,8 +83,10 @@ h3 {
   font-weight: 650;
   letter-spacing: -0.4px;
 }
-.brand > .el-icon {
-  color: #8bb5ff;
+.app-logo {
+  width: 32px;
+  height: 32px;
+  object-fit: contain;
 }
 .brand .el-tag {
   margin-left: 4px;
@@ -89,13 +96,14 @@ h3 {
 }
 .workspace {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 332px;
+  grid-template-columns: var(--workspace-columns);
   min-height: 0;
   flex: 1;
 }
 .workspace-main {
-  padding: 25px 24px 22px;
+  padding: 25px var(--workspace-gutter) 22px;
   overflow-y: auto;
+  scrollbar-gutter: stable;
   min-width: 0;
 }
 .source-heading {
@@ -168,6 +176,7 @@ h3 {
 .toolbar-buttons {
   gap: 8px;
   font-size: 12px;
+  flex-wrap: wrap;
 }
 .toolbar-buttons .el-button + .el-button {
   margin: 0;
@@ -263,8 +272,10 @@ h3 {
 }
 .settings-panel {
   border-left: 1px solid #2a3345;
-  padding: 24px 22px;
+  padding: 24px var(--settings-gutter);
+  min-width: 0;
   overflow-y: auto;
+  scrollbar-gutter: stable;
   background: #141a25;
 }
 .section-heading {
@@ -369,6 +380,8 @@ h3 {
   margin-left: 6px;
 }
 .log-viewport {
+  user-select: text;
+  -webkit-user-select: text;
   height: 170px;
   overflow: auto;
   font:
@@ -394,18 +407,29 @@ h3 {
   color: #657a99;
 }
 .task-footer {
-  height: 78px;
+  min-height: 78px;
   flex-shrink: 0;
   border-top: 1px solid #2a3345;
   background: #141a25;
-  display: flex;
+  display: grid;
+  grid-template-columns: var(--workspace-columns);
   align-items: center;
-  padding: 14px 26px;
-  gap: 30px;
 }
 .task-progress {
-  flex: 1;
-  max-width: 760px;
+  min-width: 0;
+  margin: 14px var(--workspace-gutter);
+  overflow-y: hidden;
+  scrollbar-gutter: stable;
+}
+.task-actions {
+  height: 100%;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  padding: 14px var(--settings-gutter);
+  border-left: 1px solid #2a3345;
+  overflow-y: hidden;
+  scrollbar-gutter: stable;
 }
 .task-progress > div:first-child {
   display: flex;
@@ -418,9 +442,9 @@ h3 {
   color: #a9c8fa;
   font-weight: 500;
 }
-.task-footer > .el-button {
-  margin-left: auto;
-  min-width: 190px;
+.task-actions > .el-button {
+  width: 100%;
+  min-width: 0;
 }
 .result-panel {
   margin: 12px 0;
@@ -477,11 +501,13 @@ h3 {
   background: #151c27;
 }
 @media (max-width: 1150px) {
-  .workspace {
-    grid-template-columns: minmax(0, 1fr) 296px;
+  :root {
+    --settings-width: 296px;
+    --workspace-gutter: 18px;
+    --settings-gutter: 17px;
   }
   .workspace-main {
-    padding: 22px 18px;
+    padding: 22px var(--workspace-gutter);
   }
   .source-heading {
     align-items: flex-start;
@@ -498,7 +524,7 @@ h3 {
     flex-direction: column;
   }
   .settings-panel {
-    padding: 22px 17px;
+    padding: 22px var(--settings-gutter);
   }
 }
 @media (max-width: 800px) {
@@ -511,8 +537,8 @@ h3 {
   .header-actions > .el-button:last-child {
     display: none;
   }
-  .workspace {
-    grid-template-columns: minmax(0, 1fr) 260px;
+  :root {
+    --settings-width: 260px;
   }
   .source-buttons {
     gap: 5px;
@@ -520,10 +546,37 @@ h3 {
   .source-buttons .el-button {
     padding: 8px;
   }
-  .task-footer {
-    padding: 12px 18px;
+}
+@media (max-width: 760px) {
+  :root {
+    --workspace-columns: minmax(0, 1fr);
+    --workspace-gutter: 16px;
+    --settings-gutter: 16px;
   }
-  .task-footer > .el-button {
-    min-width: 150px;
+  .workspace {
+    overflow-y: auto;
+    scrollbar-gutter: stable;
+  }
+  .workspace-main,
+  .settings-panel {
+    overflow: visible;
+  }
+  .settings-panel {
+    border-left: 0;
+    border-top: 1px solid #2a3345;
+  }
+  .task-actions {
+    border-left: 0;
+    padding-top: 0;
+  }
+  .app-header {
+    height: auto;
+    min-height: 68px;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding-block: 12px;
+  }
+  .source-path {
+    max-width: calc(100vw - 32px);
   }
 }

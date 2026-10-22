@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from "vue";
-const props = defineProps<{ lines: string[]; zh: boolean }>();
-defineEmits(["export"]);
+const props = defineProps<{ lines: string[]; zh: boolean; copying: boolean }>();
+defineEmits(["copy", "view"]);
 const viewport = ref<HTMLElement>(),
   top = ref(0),
   follow = ref(true),
@@ -48,12 +48,22 @@ watch(
         ><el-checkbox v-model="follow">{{
           zh ? "跟随输出" : "Follow"
         }}</el-checkbox
-        ><el-button size="small" @click="$emit('export')">{{
-          zh ? "导出完整日志" : "Export full log"
+        ><el-button size="small" @click="$emit('view')">{{
+          zh ? "查看完整日志" : "View full log"
+        }}</el-button
+        ><el-button size="small" :loading="copying" @click="$emit('copy')">{{
+          zh ? "复制完整日志" : "Copy full log"
         }}</el-button>
       </div>
     </div>
-    <div ref="viewport" class="log-viewport" role="log" @scroll="scroll">
+    <div
+      ref="viewport"
+      class="log-viewport"
+      role="log"
+      tabindex="0"
+      @scroll="scroll"
+      @pointerdown="follow = false"
+    >
       <div
         :style="{
           height: filtered.length * lineHeight + 'px',

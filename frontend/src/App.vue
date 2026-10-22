@@ -4,7 +4,6 @@ import {
   FolderOpened,
   DocumentAdd,
   Refresh,
-  VideoCamera,
   VideoPlay,
   CircleClose,
 } from "@element-plus/icons-vue";
@@ -16,6 +15,7 @@ import VideoTable from "./components/VideoTable.vue";
 import SettingsPanel from "./components/SettingsPanel.vue";
 import LogPanel from "./components/LogPanel.vue";
 import TaskResult from "./components/TaskResult.vue";
+import appIcon from "../../assets/icons/VideoMergingTool.png";
 const w = useWorkspace();
 const {
   settings,
@@ -36,6 +36,9 @@ const {
   zh,
   t,
   ordered,
+  fullLogText,
+  logDialogVisible,
+  copyingLogs,
 } = w;
 const version = window.__VMT__.version;
 const statusText = computed(() => {
@@ -56,8 +59,8 @@ const checks = computed(() => result.value?.checks || []);
     <div class="app-shell">
       <header class="app-header">
         <div class="brand">
-          <el-icon :size="25"><VideoCamera /></el-icon
-          ><span>VideoMergingTool</span
+          <img :src="appIcon" class="app-logo" alt="VideoMergingTool" />
+          <span>VideoMergingTool</span
           ><el-tag size="small" effect="plain">{{ version }}</el-tag>
         </div>
         <div class="header-actions">
@@ -206,7 +209,39 @@ const checks = computed(() => result.value?.checks || []);
             >
           </div>
           <TaskResult :result="result" :zh="zh" @retry="w.retryFailures" />
-          <LogPanel :lines="logs" :zh="zh" @export="w.exportLogs" />
+          <LogPanel
+            :lines="logs"
+            :zh="zh"
+            :copying="copyingLogs"
+            @copy="w.copyLogs"
+            @view="w.showFullLogs"
+          />
+          <el-dialog
+            v-model="logDialogVisible"
+            :title="t('完整处理日志', 'Full process log')"
+            width="85%"
+          >
+            <p>
+              {{
+                t(
+                  "点击文本后可全选复制；此处包含全部日志，不受筛选或虚拟滚动影响。",
+                  "Select and copy all text here. This includes all logs, regardless of filtering or virtual scrolling.",
+                )
+              }}
+            </p>
+            <el-input
+              :model-value="fullLogText"
+              type="textarea"
+              readonly
+              :rows="20"
+              :aria-label="t('完整处理日志', 'Full process log')"
+            />
+            <template #footer
+              ><el-button :loading="copyingLogs" @click="w.copyLogs">{{
+                t("复制完整日志", "Copy full log")
+              }}</el-button></template
+            >
+          </el-dialog>
         </div>
         <SettingsPanel
           :settings="settings"
@@ -227,28 +262,30 @@ const checks = computed(() => result.value?.checks || []);
             :stroke-width="5"
           />
         </div>
-        <el-button
-          v-if="running"
-          size="large"
-          type="danger"
-          :icon="CircleClose"
-          @click="w.cancel"
-          >{{ t("停止任务", "Stop task") }}</el-button
-        ><el-button
-          v-else
-          size="large"
-          type="primary"
-          :icon="VideoPlay"
-          :disabled="
-            busy || (!ordered.length && !scanIssues.length) || !depsReady
-          "
-          @click="w.start"
-          >{{
-            settings.dryRun
-              ? t("试运行", "Dry run")
-              : t("开始合并", "Start merge")
-          }}</el-button
-        >
+        <div class="task-actions">
+          <el-button
+            v-if="running"
+            size="large"
+            type="danger"
+            :icon="CircleClose"
+            @click="w.cancel"
+            >{{ t("停止任务", "Stop task") }}</el-button
+          ><el-button
+            v-else
+            size="large"
+            type="primary"
+            :icon="VideoPlay"
+            :disabled="
+              busy || (!ordered.length && !scanIssues.length) || !depsReady
+            "
+            @click="w.start"
+            >{{
+              settings.dryRun
+                ? t("试运行", "Dry run")
+                : t("开始合并", "Start merge")
+            }}</el-button
+          >
+        </div>
       </footer>
     </div>
   </el-config-provider>
