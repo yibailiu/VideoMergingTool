@@ -4,10 +4,14 @@ import logging
 import os
 import shlex
 import subprocess
+import tempfile
 from pathlib import Path
 from typing import Iterable, Sequence
 
 from .errors import CommandError
+
+
+FFMPEG_RUNTIME_ARGS = ("-hide_banner", "-loglevel", "warning", "-nostats", "-nostdin")
 
 
 def subprocess_window_kwargs() -> dict[str, int]:
@@ -23,21 +27,31 @@ def run_command(args: Sequence[str | Path], logger: logging.Logger, dry_run: boo
         logger.info("[dry-run] %s", printable)
         return
 
-    process = subprocess.run(
-        [str(arg) for arg in args],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        **subprocess_window_kwargs(),
-    )
-    if process.returncode != 0:
-        if process.stdout.strip():
-            logger.debug("Command stdout:\n%s", process.stdout.strip())
-        if process.stderr.strip():
-            logger.error("Command stderr:\n%s", process.stderr.strip())
-        raise CommandError(f"Command failed with exit code {process.returncode}: {printable}")
+    from .reliability import current_run
+    task_run = current_run.get()
+    if task_run and task_run.abort_event.is_set():
+        raise CommandError("Task stopped after another processing failure.")
+    with tempfile.TemporaryFile() as diagnostics:
+        with subprocess.Popen([str(arg) for arg in args], stdout=subprocess.DEVNULL,
+                              stderr=diagnostics, **subprocess_window_kwargs()) as process:
+            if task_run:
+                task_run.track_process(process)
+            try:
+                code = process.wait()
+            finally:
+                if task_run:
+                    task_run.untrack_process(process)
+        diagnostics.seek(0)
+        # Stream diagnostics to the detailed log without retaining them in memory.
+        for line in diagnostics:
+            logger.debug("FFmpeg: %s", line.decode("utf-8", errors="replace").rstrip())
+        diagnostics.seek(0, os.SEEK_END)
+        diagnostics.seek(max(0, diagnostics.tell() - 8192))
+        reason = diagnostics.read().decode("utf-8", errors="replace").strip()
+    if code != 0:
+        if reason:
+            logger.error("Command stderr:\n%s", reason)
+        raise CommandError(f"Media processing failed with exit code {code}:\n{reason}")
 
 
 def write_concat_list(paths: Iterable[Path], list_path: Path) -> None:

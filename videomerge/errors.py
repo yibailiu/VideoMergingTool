@@ -12,3 +12,7 @@ class ProbeError(VideoMergeError):
 
 class CommandError(VideoMergeError):
     """Raised when an external command fails."""
+
+
+class NoUsableInputs(CommandError):
+    """Every input of one output group was explicitly excluded as damaged."""

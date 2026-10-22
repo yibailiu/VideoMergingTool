@@ -8,17 +8,20 @@ from typing import Optional
 
 import typer
 
+from .adjustments import apply_clockwise_rotation, validate_clockwise_rotation
 from .env_check import default_tools_dir, resolve_tools
-from .errors import CommandError, DependencyError, VideoMergeError
-from .grouping import choose_canvas, choose_fps, group_fast, majority_codec_plan, split_by_orientation
+from .errors import CommandError, DependencyError, VideoMergeError, NoUsableInputs
+from .grouping import group_fast, split_by_orientation
 from .gpu import GpuMode, apply_gpu_encoder, resolve_gpu_plan
 from .logger import setup_logging
 from .merge import concat_copy, warn_container_compatibility
 from .models import CodecPlan, MergeMode, MergeResult, Orientation, VideoFile
 from .naming import SUPPORTED_OUTPUT_FORMATS, auto_name, prepare_output_dir, unique_output_path
+from .planning import build_extreme_group_plan, build_optimal_group_plan
 from .probe import probe_files
-from .scanner import SORT_OPTIONS, VIDEO_EXTENSIONS, scan_video_files
+from .scanner import SORT_OPTIONS, VIDEO_EXTENSIONS, scan_video_files, sort_probed_files
 from .transcode import preprocess_group
+from .reliability import TaskRun, current_run, filter_checked_inputs, is_system_failure
 
 app = typer.Typer(help="Local batch video merging tool powered by FFmpeg.", no_args_is_help=True)
 
@@ -40,6 +43,23 @@ def gui() -> None:
         raise typer.Exit(code=1) from exc
 
 
+@app.command("self-check")
+def self_check(
+    report_file: Path = typer.Option(..., "--report-file"),
+    require_bundled: bool = typer.Option(True, "--require-bundled/--no-require-bundled"),
+) -> None:
+    """Verify offline UI resources and run a real merge using the packaged tools."""
+    from .self_check import run_self_check
+    try:
+        result = run_self_check(require_bundled)
+    except Exception as exc:
+        result = {"status": "failed", "error": str(exc)}
+    report_file.parent.mkdir(parents=True, exist_ok=True)
+    report_file.write_text(json.dumps(result, indent=2), encoding="utf-8")
+    if result["status"] != "passed":
+        raise typer.Exit(code=1)
+
+
 @app.command()
 def merge(
     input_dir: Path = typer.Argument(..., help="Directory containing videos to merge."),
@@ -48,7 +68,7 @@ def merge(
     output_format: str = typer.Option("mp4", "--output-format", help="mp4, mkv, mov, avi, ts, webm."),
     name: Optional[str] = typer.Option(None, "--name", help="Custom output filename without extension."),
     recursive: bool = typer.Option(True, "--recursive/--no-recursive", help="Scan subdirectories."),
-    sort_by: str = typer.Option("name-natural-asc", "--sort-by", help="Merge order: name-natural-asc, name-natural-desc, name-asc, name-desc, modified-asc, modified-desc, size-asc, size-desc."),
+    sort_by: str = typer.Option("name-natural-asc", "--sort-by", help="Merge order: name-natural-asc, name-natural-desc, name-asc, name-desc, media-created-asc, media-created-desc, size-asc, size-desc."),
     overwrite: bool = typer.Option(False, "--overwrite", help="Overwrite existing output files."),
     keep_temp: bool = typer.Option(False, "--keep-temp", help="Keep temporary preprocessed files."),
     temp_dir: Optional[Path] = typer.Option(None, "--temp-dir", help="Directory used for temporary preprocessing and concat files."),
@@ -56,12 +76,14 @@ def merge(
     dry_run: bool = typer.Option(False, "--dry-run", help="Print actions without running FFmpeg."),
     pad_color: str = typer.Option("black", "--pad-color", help="Padding color used for transcode modes."),
     fps_policy: str = typer.Option("majority", "--fps-policy", help="majority, max, or min."),
-    resolution_policy: str = typer.Option("largest", "--resolution-policy", help="Currently supports largest."),
+    resolution_policy: str = typer.Option("dominant", "--resolution-policy", help="dominant or largest."),
     video_codec: Optional[str] = typer.Option(None, "--video-codec", help="Override target video codec."),
     audio_codec: Optional[str] = typer.Option(None, "--audio-codec", help="Override target audio codec."),
-    crf: int = typer.Option(20, "--crf", min=0, max=51, help="Video CRF for transcode modes."),
-    preset: str = typer.Option("medium", "--preset", help="FFmpeg encoder preset."),
+    quality_profile: str = typer.Option("balanced", "--quality-profile", help="Quality profile: balanced, high, or small."),
+    crf: Optional[int] = typer.Option(None, "--crf", min=0, max=51, help="Video CRF for transcode modes. Overrides --quality-profile."),
+    preset: Optional[str] = typer.Option(None, "--preset", help="FFmpeg encoder preset. Overrides --quality-profile."),
     gpu: GpuMode = typer.Option(GpuMode.off, "--gpu", help="GPU acceleration: off, auto, nvenc, qsv, amf, videotoolbox."),
+    gpu_workers: int = typer.Option(1, "--gpu-workers", min=1, max=3, help="Concurrent GPU transcode jobs (1-3)."),
     ffmpeg_path: Optional[Path] = typer.Option(None, "--ffmpeg-path", help="Explicit ffmpeg path."),
     ffprobe_path: Optional[Path] = typer.Option(None, "--ffprobe-path", help="Explicit ffprobe path."),
     selected_files: Optional[Path] = typer.Option(
@@ -75,13 +97,23 @@ def merge(
         help="Automatically download ffmpeg/ffprobe if missing.",
     ),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Enable verbose console logs."),
+    check_level: str = typer.Option("quick", "--check-level", help="Input check: basic, quick, full."),
+    on_error: str = typer.Option("stop", "--on-error", help="Input failure policy: stop or skip."),
+    report_file: Optional[Path] = typer.Option(None, "--report-file", help="Write a structured task result JSON."),
 ) -> None:
     started = time.perf_counter()
     output_format = output_format.lower().lstrip(".")
     logger = setup_logging(log_file=log_file, verbose=verbose)
+    run = TaskRun(on_error, check_level, logger)
+    context_token = current_run.set(run)
+    task_status, task_error = "failed", ""
 
     try:
-        _validate_cli(input_dir, output_format, fps_policy, resolution_policy, sort_by, temp_dir)
+        if check_level not in {"basic", "quick", "full"} or on_error not in {"stop", "skip"}:
+            raise VideoMergeError("Invalid check level or failure policy.")
+        _validate_cli(input_dir, output_format, fps_policy, resolution_policy, sort_by, quality_profile, temp_dir)
+        quality = _resolve_quality_settings(quality_profile, crf, preset)
+        logger.info("Quality profile: %s | crf=%d preset=%s", quality_profile, quality["crf"], quality["preset"])
         out_dir = prepare_output_dir(input_dir, output_dir)
         if temp_dir:
             temp_dir.mkdir(parents=True, exist_ok=True)
@@ -93,21 +125,55 @@ def merge(
             ffprobe_path=ffprobe_path,
         )
 
+        manual_rotations: dict[Path, int] = {}
         if selected_files:
-            paths = _load_selected_video_files(selected_files, input_dir)
+            paths, manual_rotations = _load_selected_video_manifest(selected_files, input_dir)
             logger.info("Loaded %d selected video file(s) from %s", len(paths), selected_files)
         else:
-            paths = scan_video_files(input_dir, recursive=recursive, sort_by=sort_by)
+            paths = scan_video_files(
+                input_dir,
+                recursive=recursive,
+                sort_by=sort_by,
+                excluded_dirs=(out_dir,),
+            )
             logger.info("Scanned %d candidate video files from %s using sort=%s", len(paths), input_dir, sort_by)
         if not paths:
             raise VideoMergeError("No recognized video files found.")
 
         media_files, failures = probe_files(paths, tools, logger)
+        if not selected_files:
+            media_files = sort_probed_files(media_files, input_dir, sort_by)
+        elif manual_rotations:
+            media_files = [
+                apply_clockwise_rotation(file, manual_rotations.get(file.path.resolve(), 0))
+                for file in media_files
+            ]
+            for file in media_files:
+                clockwise_rotation = manual_rotations.get(file.path.resolve(), 0)
+                if clockwise_rotation:
+                    logger.info(
+                        "Manual adjustment: %s | clockwise=%d effective_rotation=%d display=%dx%d orientation=%s",
+                        file.path.name,
+                        clockwise_rotation,
+                        file.rotation,
+                        file.display_width,
+                        file.display_height,
+                        file.orientation.value,
+                    )
         if failures:
             for path, reason in failures.items():
-                logger.warning("Probe failure: %s | %s", path, reason)
+                if on_error == "stop" or is_system_failure(reason) or "timed out" in reason.lower():
+                    raise VideoMergeError(f"Cannot analyze {path}: {reason}")
+                run.skip(path, "probe", reason)
+        media_files = filter_checked_inputs(media_files, tools, run) if not dry_run else media_files
+        for file in media_files:
+            run.sources[file.path] = file
         if not media_files:
             raise VideoMergeError("No readable video files found.")
+        if mode == MergeMode.fast and any(manual_rotations.values()):
+            raise VideoMergeError(
+                "Manual rotation requires Optimal or Extreme mode; Fast mode only performs stream copy."
+            )
         progress = ProgressReporter(total_units=_estimate_progress_units(mode, media_files), logger=logger)
         progress.advance(0, "analysis complete")
 
@@ -139,11 +205,13 @@ def merge(
                 keep_temp=keep_temp,
                 pad_color=pad_color,
                 fps_policy=fps_policy,
+                resolution_policy=resolution_policy,
                 video_codec=video_codec,
                 audio_codec=audio_codec,
-                crf=crf,
-                preset=preset,
+                crf=int(quality["crf"]),
+                preset=str(quality["preset"]),
                 gpu=gpu,
+                gpu_workers=gpu_workers,
                 temp_dir=temp_dir,
                 progress=progress,
             )
@@ -163,9 +231,10 @@ def merge(
                 fps_policy=fps_policy,
                 video_codec=video_codec,
                 audio_codec=audio_codec,
-                crf=crf,
-                preset=preset,
+                crf=int(quality["crf"]),
+                preset=str(quality["preset"]),
                 gpu=gpu,
+                gpu_workers=gpu_workers,
                 temp_dir=temp_dir,
                 progress=progress,
             )
@@ -181,10 +250,19 @@ def merge(
         logger.info("Completed %d output file(s):", len(results))
         for result in results:
             logger.info("  %s", result.output_path)
-    except (VideoMergeError, DependencyError, CommandError) as exc:
+        task_status = "partial" if run.skipped else "completed"
+    except (VideoMergeError, DependencyError, CommandError, OSError) as exc:
+        task_error = str(exc)
         logger.error("%s", exc)
         raise typer.Exit(code=1) from exc
     finally:
+        run.cleanup()
+        snapshot = run.snapshot(task_status, task_error)
+        logger.info("TASK_EVENT:%s", json.dumps(snapshot, ensure_ascii=False))
+        if report_file:
+            report_file.parent.mkdir(parents=True, exist_ok=True)
+            report_file.write_text(json.dumps(snapshot, ensure_ascii=False, indent=2), encoding="utf-8")
+        current_run.reset(context_token)
         elapsed = time.perf_counter() - started
         logger.info("Total runtime: %.2fs", elapsed)
 
@@ -217,6 +295,7 @@ def _validate_cli(
     fps_policy: str,
     resolution_policy: str,
     sort_by: str,
+    quality_profile: str,
     temp_dir: Path | None = None,
 ) -> None:
     if not input_dir.exists():
@@ -227,15 +306,39 @@ def _validate_cli(
         raise VideoMergeError(f"Unsupported output format: {output_format}")
     if fps_policy not in {"majority", "max", "min"}:
         raise VideoMergeError("Invalid --fps-policy. Use majority, max, or min.")
-    if resolution_policy != "largest":
-        raise VideoMergeError("Only --resolution-policy largest is currently supported.")
+    if resolution_policy not in {"dominant", "largest"}:
+        raise VideoMergeError("Invalid --resolution-policy. Use dominant or largest.")
     if sort_by not in SORT_OPTIONS:
         raise VideoMergeError(f"Invalid --sort-by. Use one of: {', '.join(sorted(SORT_OPTIONS))}.")
+    if quality_profile not in {"balanced", "high", "small"}:
+        raise VideoMergeError("Invalid --quality-profile. Use balanced, high, or small.")
     if temp_dir and temp_dir.exists() and not temp_dir.is_dir():
         raise VideoMergeError(f"Temp path is not a directory: {temp_dir}")
 
 
+def _resolve_quality_settings(quality_profile: str, crf: int | None, preset: str | None) -> dict[str, object]:
+    defaults = {
+        "high": {"crf": 20, "preset": "slow"},
+        "balanced": {"crf": 23, "preset": "medium"},
+        "small": {"crf": 25, "preset": "medium"},
+    }
+    selected = defaults[quality_profile].copy()
+    if crf is not None:
+        selected["crf"] = crf
+    if preset is not None:
+        selected["preset"] = preset
+    return selected
+
+
 def _load_selected_video_files(selected_files: Path, input_dir: Path) -> list[Path]:
+    paths, _manual_rotations = _load_selected_video_manifest(selected_files, input_dir)
+    return paths
+
+
+def _load_selected_video_manifest(
+    selected_files: Path,
+    input_dir: Path,
+) -> tuple[list[Path], dict[Path, int]]:
     if not selected_files.exists():
         raise VideoMergeError(f"Selected file list does not exist: {selected_files}")
     try:
@@ -247,11 +350,23 @@ def _load_selected_video_files(selected_files: Path, input_dir: Path) -> list[Pa
 
     root = input_dir.resolve()
     paths: list[Path] = []
+    manual_rotations: dict[Path, int] = {}
     seen: set[Path] = set()
     for item in payload:
-        if not isinstance(item, str):
-            raise VideoMergeError("Selected file list contains a non-string path.")
-        path = Path(item).expanduser().resolve()
+        if isinstance(item, str):
+            raw_path = item
+            clockwise_rotation = 0
+        elif isinstance(item, dict):
+            raw_path = item.get("path")
+            if not isinstance(raw_path, str):
+                raise VideoMergeError("Selected file entry must contain a string path.")
+            try:
+                clockwise_rotation = validate_clockwise_rotation(item.get("rotate_clockwise", 0))
+            except ValueError as exc:
+                raise VideoMergeError(f"Invalid manual rotation for selected file: {raw_path}") from exc
+        else:
+            raise VideoMergeError("Selected file list entries must be paths or adjustment objects.")
+        path = Path(raw_path).expanduser().resolve()
         try:
             path.relative_to(root)
         except ValueError as exc:
@@ -264,7 +379,9 @@ def _load_selected_video_files(selected_files: Path, input_dir: Path) -> list[Pa
             raise VideoMergeError(f"Selected file is not a supported video format: {path}")
         seen.add(path)
         paths.append(path)
-    return paths
+        if clockwise_rotation:
+            manual_rotations[path] = clockwise_rotation
+    return paths, manual_rotations
 
 
 def _log_merge_summary(total_video_count: int, merged_video_count: int, logger: logging.Logger) -> None:
@@ -297,13 +414,16 @@ def _run_fast(
         logger.info("Fast group %d: %d file(s) | %s", index, len(files), key)
         if len(files) < 2:
             logger.warning("Skipping %s: no compatible peer for stream-copy concat.", files[0].path)
+            task_run = current_run.get()
+            if task_run:
+                task_run.skip(files[0].path, "planning", "No compatible peer for stream-copy concat.")
             continue
         resolution = f"{key.width}x{key.height}"
         base_name = name or auto_name(input_dir.name, f"fast_{index}", resolution)
         if name and len(groups) > 1:
             base_name = f"{name}_{index}"
         output_path = unique_output_path(output_dir, base_name, output_format, overwrite)
-        result = concat_copy(
+        result = _concat_surviving_group(
             files=[file.path for file in files],
             output_path=output_path,
             tools=tools,
@@ -312,8 +432,12 @@ def _run_fast(
             overwrite=overwrite,
             dry_run=dry_run,
             temp_root=temp_dir,
+            expected_duration=sum(file.duration for file in files),
+            expected_source_size=_source_total_size(files),
+            expected_file_count=len(files),
         )
-        results.append(result)
+        if result:
+            results.append(result)
         progress.advance(len(files), f"merged fast group {index}")
     return results
 
@@ -331,28 +455,17 @@ def _run_optimal(
     keep_temp: bool,
     pad_color: str,
     fps_policy: str,
+    resolution_policy: str,
     video_codec: str | None,
     audio_codec: str | None,
     crf: int,
     preset: str,
     gpu: GpuMode,
+    gpu_workers: int,
     temp_dir: Path | None,
     progress: ProgressReporter,
 ) -> list[MergeResult]:
     logger.info("Mode: optimal. Files will be split into landscape and portrait outputs.")
-    codec_plan = _container_adjusted_plan(
-        majority_codec_plan(
-            media_files,
-            video_codec,
-            audio_codec,
-            default_video_codec=_default_transcode_video_codec(output_format),
-        ),
-        output_format,
-        logger,
-    )
-    gpu_plan = resolve_gpu_plan(tools, gpu, codec_plan.video_codec, logger)
-    codec_plan = apply_gpu_encoder(codec_plan, gpu_plan)
-    logger.info("Target codecs: video=%s audio=%s", codec_plan.video_codec, codec_plan.audio_codec)
     groups = split_by_orientation(media_files)
     results: list[MergeResult] = []
     temp_owners = []
@@ -362,8 +475,32 @@ def _run_optimal(
         if not files:
             logger.info("No %s videos found; skipping that output.", orientation.value)
             continue
-        canvas = choose_canvas(files)
-        fps = choose_fps(files, fps_policy)
+        plan = build_optimal_group_plan(
+            files,
+            output_format=output_format,
+            requested_video_codec=video_codec,
+            requested_audio_codec=audio_codec,
+            fps_policy=fps_policy,
+            resolution_policy=resolution_policy,
+        )
+        profile = plan.profile
+        codec_plan = plan.codec_plan
+        gpu_plan = resolve_gpu_plan(tools, gpu, codec_plan.video_codec, logger)
+        codec_plan = apply_gpu_encoder(codec_plan, gpu_plan)
+        canvas = plan.canvas
+        fps = plan.fps
+        logger.info(
+            "Optimal target: orientation=%s canvas=%s fps=%.3f video=%s audio=%s "
+            "reference_files=%d reference_bitrate=%dkbps resolution_policy=%s",
+            orientation.value,
+            canvas.label,
+            fps,
+            codec_plan.video_codec,
+            codec_plan.audio_codec,
+            len(profile.files),
+            round(profile.video_bitrate / 1000),
+            resolution_policy,
+        )
         warn_container_compatibility(output_format, codec_plan.output_video_encoder, codec_plan.output_audio_encoder, logger)
         preprocessed, owner = preprocess_group(
             files=files,
@@ -380,18 +517,38 @@ def _run_optimal(
             gpu_plan=gpu_plan,
             temp_root=temp_dir,
             progress_callback=lambda file: progress.advance(1, f"preprocessed {file.path.name}"),
+            reference_files=profile.files,
+            target_video_bitrate=profile.video_bitrate,
+            gpu_workers=gpu_workers,
         )
         if owner:
             temp_owners.append(owner)
+        if not preprocessed:
+            logger.warning("All %s inputs were skipped; no output for this group.", orientation.value)
+            continue
         base_name = name or auto_name(input_dir.name, orientation.value, canvas.label)
         if name and len(groups) > 1:
             base_name = f"{name}_{orientation.value}"
         output_path = unique_output_path(output_dir, base_name, output_format, overwrite)
-        results.append(concat_copy(preprocessed, output_path, tools, logger, MergeMode.optimal, overwrite, dry_run, temp_dir))
+        results.append(
+            _concat_surviving_group(
+                preprocessed,
+                output_path,
+                tools,
+                logger,
+                MergeMode.optimal,
+                overwrite,
+                dry_run,
+                temp_dir,
+                expected_duration=sum(file.duration for file in files),
+                expected_source_size=_source_total_size(files),
+                expected_file_count=len(files),
+            )
+        )
         progress.advance(1, f"merged {orientation.value} output")
 
     _cleanup_temp_owners(temp_owners, logger)
-    return results
+    return [result for result in results if result is not None]
 
 
 def _run_extreme(
@@ -412,24 +569,23 @@ def _run_extreme(
     crf: int,
     preset: str,
     gpu: GpuMode,
+    gpu_workers: int,
     temp_dir: Path | None,
     progress: ProgressReporter,
 ) -> list[MergeResult]:
     logger.info("Mode: extreme. All files will be normalized into one output.")
-    codec_plan = _container_adjusted_plan(
-        majority_codec_plan(
-            media_files,
-            video_codec,
-            audio_codec,
-            default_video_codec=_default_transcode_video_codec(output_format),
-        ),
-        output_format,
-        logger,
+    plan = build_extreme_group_plan(
+        media_files,
+        output_format=output_format,
+        requested_video_codec=video_codec,
+        requested_audio_codec=audio_codec,
+        fps_policy=fps_policy,
     )
+    codec_plan = plan.codec_plan
     gpu_plan = resolve_gpu_plan(tools, gpu, codec_plan.video_codec, logger)
     codec_plan = apply_gpu_encoder(codec_plan, gpu_plan)
-    canvas = choose_canvas(media_files)
-    fps = choose_fps(media_files, fps_policy)
+    canvas = plan.canvas
+    fps = plan.fps
     logger.info(
         "Extreme target: canvas=%s fps=%.3f video=%s audio=%s",
         canvas.label,
@@ -453,16 +609,54 @@ def _run_extreme(
         gpu_plan=gpu_plan,
         temp_root=temp_dir,
         progress_callback=lambda file: progress.advance(1, f"preprocessed {file.path.name}"),
+        target_video_bitrate=plan.profile.video_bitrate,
+        gpu_workers=gpu_workers,
     )
     base_name = name or auto_name(input_dir.name, "extreme", canvas.label)
     output_path = unique_output_path(output_dir, base_name, output_format, overwrite)
-    result = concat_copy(preprocessed, output_path, tools, logger, MergeMode.extreme, overwrite, dry_run, temp_dir)
+    result = concat_copy(
+        preprocessed,
+        output_path,
+        tools,
+        logger,
+        MergeMode.extreme,
+        overwrite,
+        dry_run,
+        temp_dir,
+        expected_duration=sum(file.duration for file in media_files),
+        expected_source_size=_source_total_size(media_files),
+        expected_file_count=len(media_files),
+    )
     progress.advance(1, "merged extreme output")
     _cleanup_temp_owners([owner] if owner else [], logger)
     return [result]
 
 
+def _concat_surviving_group(*args, **kwargs) -> MergeResult | None:
+    try:
+        return concat_copy(*args, **kwargs)
+    except NoUsableInputs:
+        run = current_run.get()
+        if run and run.policy == "skip":
+            run.logger.warning("No usable inputs remain in this output group; continuing other groups.")
+            return None
+        raise
+
+
+def _source_total_size(files: list[VideoFile]) -> int:
+    total = 0
+    for file in files:
+        try:
+            total += file.path.stat().st_size
+        except OSError:
+            return 0
+    return total
+
+
 def _container_adjusted_plan(plan: CodecPlan, output_format: str, logger: logging.Logger) -> CodecPlan:
+    if output_format == "mp4" and plan.audio_codec not in {"aac", "mp3"}:
+        logger.warning("Switching target audio encoder to AAC for %s compatibility.", output_format)
+        plan = CodecPlan(plan.video_codec, "aac", plan.output_video_encoder, "aac")
     if output_format == "webm":
         if plan.output_video_encoder not in {"libvpx", "libvpx-vp9", "libaom-av1"}:
             logger.warning("Switching target video encoder to VP9 for webm compatibility.")

@@ -18,22 +18,31 @@
 
 ---
 
-VideoMergingTool 用来把一个文件夹里的多个视频批量合并成更长的视频。它面向普通桌面用户设计：安装应用，选择视频文件夹，确认识别结果，选择合并模式，然后开始合并。
+VideoMergingTool 用来把多个视频批量合并成更长的视频。它面向普通桌面用户设计：安装应用，选择视频文件夹或直接选择若干视频，确认识别结果，选择合并模式，然后开始合并。
+
+当前版本：`6.0.0`。更新内容见 [6.0.0 发布说明](docs/releases/v6.0.0.md)，安装包见 [Releases 页面](https://github.com/yibailiu/VideoMergingTool/releases)。
+
+6.0.0 使用 Vue 3、Element Plus 与 AG Grid Community 重构桌面界面，并增加视频快速抽检、完整解码检查，以及“损坏时停止／跳过继续”的任务策略。详细行为和开发说明见 [6.0.0 说明](docs/6.0.0.md)。
 
 Windows 和 macOS 安装包已经内置 FFmpeg / FFprobe，普通用户不需要手动安装 FFmpeg，也不需要配置环境变量。
 
 ## 它能做什么
 <p align="center">
-  <img src="assets/screenshots/screenshot_zhCN.png" width="960" alt="VideoMergingTool 图标">
+  <img src="assets/screenshots/screenshot_6_zhCN.png" width="960" alt="VideoMergingTool 6.0.0 视频工作区与任务结果">
 </p>
 
-- 扫描文件夹中的常见视频格式，包括 `mp4`、`mkv`、`mov`、`avi`、`ts`、`m4v`、`flv`、`webm`
+- 扫描文件夹或直接选择一个、多个视频；支持 `mp4`、`mkv`、`mov`、`avi`、`ts`、`m4v`、`flv`、`webm`、`wmv`
 - 显示视频时长、分辨率、编码、帧率和处理状态
+- 视频表格除文件名外会按内容自动调整列宽；可拖动表头的明显手柄自定义宽度，双击恢复自适应，设置会保留到下次打开
+- 文件和文件夹选择窗口提供中文标题与筛选器；中文系统优先使用中文文案
+- 可点击文件名调用系统默认播放器，并在不修改源文件和列表顺序的前提下标记旋转或排除视频
 - 按常见规则排序合并，避免 `1, 10, 11, 2` 这类顺序问题
 - 支持横屏和竖屏视频
 - 需要统一画面尺寸时，会补边而不是裁切，尽量保留完整画面
 - 可设置输出目录、临时目录、界面语言、合并模式、GPU 选项、是否保留临时文件
-- 在应用窗口内显示处理日志和进度
+- 在应用窗口内显示完整的处理日志和进度
+- 开始前可选择基础检查、快速抽检或完整解码检查；快速抽检通过不代表整个文件无损坏
+- 损坏视频可选择停止任务或跳过继续；完成后显示输出文件、跳过清单和原因，并可导出完整日志
 - 作为桌面应用运行，不依赖浏览器打开
 
 ## 下载
@@ -43,15 +52,14 @@ Windows 和 macOS 安装包已经内置 FFmpeg / FFprobe，普通用户不需要
 | 系统 | 下载文件 | 安装方式 |
 | --- | --- | --- |
 | Windows | `VideoMergingTool-Setup.exe` | 运行安装包，然后从开始菜单或桌面图标打开。 |
-| macOS Apple 芯片 | `VideoMergingTool-macos-apple-silicon.dmg` | 打开 DMG，将应用拖入“应用程序”。 |
-| macOS Intel | `VideoMergingTool-macos-intel.dmg` | 打开 DMG，将应用拖入“应用程序”。 |
+| macOS（Apple 芯片 / Intel 通用） | `VideoMergingTool-macos-universal.dmg` | 打开 DMG，将应用拖入“应用程序”。 |
 | Linux | `VideoMergingTool` | 下载可执行文件后直接运行。 |
 
 ## 快速开始
 
 1. 打开 VideoMergingTool。
-2. 点击 **Select Folder / 选择文件夹**，选择包含视频的文件夹。
-3. 等待应用识别视频，并检查文件顺序。
+2. 点击 **Select Folder / 选择文件夹** 扫描整个文件夹，或点击 **Select Files / 选择文件** 只添加指定的一个或多个视频。
+3. 等待应用识别视频，并检查文件顺序。横竖分组仅用于查看，合并仍按统一排序规则执行；可拖动表头边界调整列宽。选择开始前检查和损坏视频处理策略，默认快速抽检、遇错停止。
 4. 选择合并模式：
    - **Fast Merge**：适合同一设备、同一参数导出的视频，速度最快，尽量无损。
    - **Optimal Merge**：适合大多数日常场景，兼顾速度、兼容性和画面方向。
@@ -69,14 +77,18 @@ Windows 和 macOS 安装包已经内置 FFmpeg / FFprobe，普通用户不需要
 
 不确定时，建议先使用 **Optimal Merge**。
 
+WMV 等源视频如果使用了 MP4 不支持的音频编码，**Optimal Merge** 和 **Extreme Merge** 会在必要时将音频转换为兼容编码（例如 AAC），避免直接复制音轨导致合并失败。**Fast Merge** 只进行流复制，不会重新编码不兼容的音轨。
+
 ## 设置和参数说明
 
 大多数用户直接使用桌面界面即可，不需要输入命令。下面的表格解释常见设置的作用，同时列出对应的命令行参数，方便高级用户自动化使用。
 
 | 界面设置 | 命令行参数 | 作用 |
 | --- | --- | --- |
-| Source Folder / 源文件夹 | `input_dir` | 包含待合并视频的文件夹。 |
+| Source Folder / 源文件夹 | `input_dir` | 包含待合并视频的文件夹；界面的“选择文件”只处理指定文件。 |
 | Merge Mode / 合并模式 | `--mode fast\|optimal\|extreme` | 选择合并策略。不确定时建议使用 `optimal`。 |
+| 开始前检查 | `--check-level basic\|quick\|full` | 默认快速抽检；完整检查解码全段，抽检不能保证未覆盖位置完好。 |
+| 损坏视频处理 | `--on-error stop\|skip` | 默认停止；跳过仅适用于确认损坏的输入，权限、磁盘等任务级错误仍会停止。 |
 | Output Folder / 输出目录 | `--output-dir PATH` | 合并后视频的保存位置。默认会使用源文件夹下的 `merged` 文件夹。 |
 | Output Format / 输出格式 | `--output-format mp4\|mkv\|mov\|avi\|ts\|webm` | 输出文件容器格式。大多数场景建议使用 `mp4`。 |
 | Output Filename Prefix / 输出文件名前缀 | `--name TEXT` | 自定义输出文件名，不包含扩展名。 |
@@ -87,11 +99,14 @@ Windows 和 macOS 安装包已经内置 FFmpeg / FFprobe，普通用户不需要
 | Temp Folder / 临时目录 | `--temp-dir PATH` | 存放临时处理文件的位置。大批量合并时建议选择空间充足的高速磁盘。 |
 | Dry Run / 试运行 | `--dry-run` | 只显示计划执行的操作，不真正调用 FFmpeg。 |
 | GPU Acceleration / GPU 加速 | `--gpu off\|auto\|nvenc\|qsv\|amf\|videotoolbox` | 可用时使用硬件编码。`auto` 更方便，`off` 兼容性最好。 |
-| Target Video Codec / 目标视频编码 | `--video-codec TEXT` | 指定输出视频编码。默认使用 H.264，WebM 输出默认 VP9。 |
-| Target Audio Codec / 目标音频编码 | `--audio-codec TEXT` | 指定输出音频编码。普通用户建议保持默认。 |
-| Quality / 质量 | `--crf 0-51` | 控制转码质量。数值越低通常质量越高、文件越大。默认值是 `20`。 |
-| Encoder Preset / 编码预设 | `--preset TEXT` | 控制编码速度和压缩效率。默认 `medium` 兼顾速度和体积。 |
+| GPU Concurrent Jobs / GPU 并发任务 | `--gpu-workers 1-3` | 默认 `1`，减少 GPU 资源争抢；高性能设备可手动提高。 |
+| Target Video Codec / 目标视频编码 | `--video-codec TEXT` | 指定输出视频编码。留空时优先保持主流源编码，WebM 输出会使用兼容编码。 |
+| Target Audio Codec / 目标音频编码 | `--audio-codec TEXT` | 指定输出音频编码。兼容源音频会尽量复制；WMAV2 等不兼容 MP4 的音频会转换为 AAC。 |
+| Quality Profile / 质量策略 | `--quality-profile balanced\|high\|small` | 选择体积、清晰度和速度策略。默认 `balanced`。 |
+| Quality / 质量 | `--crf 0-51` | 覆盖质量策略的 CRF。数值越低通常质量越高、文件越大。默认均衡策略是 `23`。 |
+| Encoder Preset / 编码预设 | `--preset TEXT` | 覆盖质量策略的编码预设。默认均衡策略是 `medium`。 |
 | FPS Policy / 帧率策略 | `--fps-policy majority\|max\|min` | 转码模式下选择目标帧率。通常使用 `majority`。 |
+| Resolution Policy / 分辨率策略 | `--resolution-policy dominant\|largest` | 默认 `dominant`，以主流源规格减少转码；`largest` 会使用最大画布。 |
 | Padding Color / 补边颜色 | `--pad-color TEXT` | 需要补边时使用的颜色，默认 `black`。 |
 | FFmpeg Path / FFmpeg 路径 | `--ffmpeg-path PATH` | 手动指定 `ffmpeg` 路径。安装包通常会使用内置版本。 |
 | FFprobe Path / FFprobe 路径 | `--ffprobe-path PATH` | 手动指定 `ffprobe` 路径。安装包通常会使用内置版本。 |
@@ -105,8 +120,8 @@ Windows 和 macOS 安装包已经内置 FFmpeg / FFprobe，普通用户不需要
 | `name-natural-desc` | 文件名自然降序。 |
 | `name-asc` | 普通文件名升序。例如：`1, 10, 2`。 |
 | `name-desc` | 普通文件名降序。 |
-| `modified-asc` | 修改时间从旧到新。 |
-| `modified-desc` | 修改时间从新到旧。 |
+| `media-created-asc` | 媒体元数据中的创建媒体日期从旧到新；无媒体日期的文件排在末尾。 |
+| `media-created-desc` | 媒体元数据中的创建媒体日期从新到旧；无媒体日期的文件排在末尾。 |
 | `size-asc` | 文件大小从小到大。 |
 | `size-desc` | 文件大小从大到小。 |
 
@@ -139,6 +154,8 @@ VideoMergingTool merge /path/to/videos --mode optimal
 源码运行主要用于测试和开发：
 
 ```bash
+npm --prefix frontend ci
+npm --prefix frontend run build
 python main.py gui
 python main.py merge /path/to/videos --mode optimal
 ```

@@ -114,26 +114,65 @@ def gpu_encoder_quality_args(
     width: int | None = None,
     height: int | None = None,
     fps: float | None = None,
+    source_bitrate: int | None = None,
 ) -> list[str]:
     if not encoder:
-        return ["-crf", str(crf), "-preset", preset]
+        return _with_bitrate_limit(_cpu_encoder_quality_args("libx264", crf, preset), source_bitrate)
+    if encoder in {"libx264", "libx265"}:
+        return _with_bitrate_limit(_cpu_encoder_quality_args(encoder, crf, preset), source_bitrate)
     if encoder in {"h264_nvenc", "hevc_nvenc"}:
-        return ["-cq", str(crf), "-preset", _nvenc_preset(preset), "-rc", "vbr"]
+        return _with_bitrate_limit(
+            ["-cq", str(crf), "-preset", _nvenc_preset(preset), "-rc", "vbr"],
+            source_bitrate,
+        )
     if encoder in {"h264_qsv", "hevc_qsv"}:
+        if source_bitrate and source_bitrate > 0:
+            return _with_bitrate_limit([], source_bitrate)
         return ["-global_quality", str(crf)]
     if encoder in {"h264_amf", "hevc_amf"}:
+        if source_bitrate and source_bitrate > 0:
+            return _with_bitrate_limit(["-quality", "balanced"], source_bitrate)
         return ["-quality", "balanced", "-qp_i", str(crf), "-qp_p", str(crf), "-qp_b", str(crf)]
     if encoder in {"h264_videotoolbox", "hevc_videotoolbox"}:
-        bitrate = _videotoolbox_bitrate(crf, width, height, fps)
-        maxrate = int(bitrate * 1.6)
+        bitrate = _videotoolbox_bitrate(
+            crf,
+            width,
+            height,
+            fps,
+            source_bitrate=source_bitrate,
+            hevc=encoder == "hevc_videotoolbox",
+        )
+        maxrate = bitrate
         bufsize = int(bitrate * 2)
         args = ["-b:v", f"{bitrate}k", "-maxrate", f"{maxrate}k", "-bufsize", f"{bufsize}k", "-allow_sw", "1"]
         if encoder == "h264_videotoolbox":
             args.extend(["-profile:v", "high"])
         return args
     if encoder == "mpeg4":
-        return ["-q:v", str(_mpeg4_quality(crf))]
-    return ["-crf", str(crf), "-preset", preset]
+        return _with_bitrate_limit(["-q:v", str(_mpeg4_quality(crf))], source_bitrate)
+    return _with_bitrate_limit(["-crf", str(crf), "-preset", preset], source_bitrate)
+
+
+def _cpu_encoder_quality_args(encoder: str, crf: int, preset: str) -> list[str]:
+    args = ["-crf", str(crf), "-preset", preset]
+    if encoder == "libx264":
+        args.extend(["-profile:v", "high"])
+    return args
+
+
+def _with_bitrate_limit(args: list[str], source_bitrate: int | None) -> list[str]:
+    if not source_bitrate or source_bitrate <= 0:
+        return args
+    bitrate_kbps = max(400, source_bitrate // 1000)
+    return [
+        *args,
+        "-b:v",
+        f"{bitrate_kbps}k",
+        "-maxrate",
+        f"{bitrate_kbps}k",
+        "-bufsize",
+        f"{bitrate_kbps * 2}k",
+    ]
 
 
 def _candidate_modes(gpu_mode: GpuMode) -> tuple[GpuMode, ...]:
@@ -180,14 +219,26 @@ def _nvenc_preset(preset: str) -> str:
     return "p5"
 
 
-def _videotoolbox_bitrate(crf: int, width: int | None, height: int | None, fps: float | None) -> int:
+def _videotoolbox_bitrate(
+    crf: int,
+    width: int | None,
+    height: int | None,
+    fps: float | None,
+    source_bitrate: int | None = None,
+    hevc: bool = False,
+) -> int:
     safe_width = width or 1920
     safe_height = height or 1080
     safe_fps = fps or 30.0
-    megapixels_per_second = (safe_width * safe_height * safe_fps) / 1_000_000
-    quality_factor = max(0.45, min(2.2, (28 - crf) / 10 + 1.0))
-    bitrate = int(megapixels_per_second * 220 * quality_factor)
-    return max(900, min(60_000, bitrate))
+    if source_bitrate and source_bitrate > 0:
+        baseline_kbps = source_bitrate / 1000
+        quality_factor = 1.0
+    else:
+        quality_factor = max(0.5, min(2.0, 2 ** ((23 - crf) / 6)))
+        bits_per_pixel = 0.065 if hevc else 0.1
+        baseline_kbps = (safe_width * safe_height * safe_fps * bits_per_pixel) / 1000
+    bitrate = int(baseline_kbps * quality_factor)
+    return max(400, min(40_000, bitrate))
 
 
 def _mpeg4_quality(crf: int) -> int:

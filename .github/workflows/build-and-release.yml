@@ -1,105 +1,181 @@
 name: Build and Release
-
 on:
   push:
-    branches:
-      - dev
-    tags:
-      - "v*"
+    branches: [main, beta, dev]
+    tags: ["v*"]
+  pull_request:
+    branches: [main, beta, dev]
   workflow_dispatch:
-
 permissions:
   contents: read
-
 env:
-  VIDEOMERGE_FFMPEG_DARWIN_SHA256: ${{ vars.VIDEOMERGE_FFMPEG_DARWIN_SHA256 }}
-  VIDEOMERGE_FFPROBE_DARWIN_SHA256: ${{ vars.VIDEOMERGE_FFPROBE_DARWIN_SHA256 }}
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   VIDEOMERGE_FFMPEG_WINDOWS_SHA256: ${{ vars.VIDEOMERGE_FFMPEG_WINDOWS_SHA256 }}
   VIDEOMERGE_FFMPEG_LINUX_SHA256: ${{ vars.VIDEOMERGE_FFMPEG_LINUX_SHA256 }}
-
 jobs:
-  build:
-    name: Build ${{ matrix.label }}
-    runs-on: ${{ matrix.os }}
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      native: ${{ steps.plan.outputs.native }}
+      macos: ${{ steps.plan.outputs.macos }}
+    steps:
+      - id: plan
+        env:
+          REF: ${{ github.ref }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          matrix='[{"os":"windows-latest","label":"windows-x64","path":"dist/installer/VideoMergingTool-Setup.exe"}]'
+          macos=true
+          if [[ "$EVENT" == push && "$REF" == refs/heads/dev ]]; then
+            macos=false
+          elif [[ "$EVENT" != push || "$REF" != refs/heads/beta ]]; then
+            matrix='[{"os":"windows-latest","label":"windows-x64","path":"dist/installer/VideoMergingTool-Setup.exe"},{"os":"ubuntu-latest","label":"linux-x64","path":"dist/VideoMergingTool"}]'
+          fi
+          echo "native={\"include\":$matrix}" >> "$GITHUB_OUTPUT"
+          echo "macos=$macos" >> "$GITHUB_OUTPUT"
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm --prefix frontend ci --no-audit --no-fund
+      - run: npm --prefix frontend test
+      - run: npm --prefix frontend run build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: vmt-frontend
+          path: videomerge/web
+          if-no-files-found: error
+  test:
+    name: Test ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - os: windows-latest
-            label: windows-x64
-            artifact_name: VideoMergingTool-windows-x64
-            package_path: dist/installer/VideoMergingTool-Setup.exe
-          - os: macos-15-intel
-            label: macos-intel
-            artifact_name: VideoMergingTool-macos-intel
-            package_path: dist/VideoMergingTool-macos-intel.dmg
-          - os: macos-14
-            label: macos-apple-silicon
-            artifact_name: VideoMergingTool-macos-apple-silicon
-            package_path: dist/VideoMergingTool-macos-apple-silicon.dmg
-          - os: ubuntu-latest
-            label: linux-x64
-            artifact_name: VideoMergingTool-linux-x64
-            package_path: dist/VideoMergingTool
-
+        os: [windows-latest, ubuntu-latest, macos-15, macos-15-intel]
+    runs-on: ${{ matrix.os }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
-
-      - name: Install build dependencies
-        run: python -m pip install -r requirements-build.txt
-
-      - name: Install Inno Setup on Windows
-        if: runner.os == 'Windows'
+          python-version: "3.13"
+          cache: pip
+      - run: python -m pip install -r requirements.txt
+      - name: Prepare native FFmpeg for integration tests
+        shell: bash
+        run: |
+          python scripts/prepare_ffmpeg.py --output .tools/ffmpeg
+          python -c 'from pathlib import Path; print(Path(".tools/ffmpeg").resolve())' >> "$GITHUB_PATH"
+      - run: python -m unittest discover -s tests
+  build-native:
+    if: github.event_name != 'pull_request'
+    needs: [plan, frontend, test]
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.native) }}
+    runs-on: ${{ matrix.os }}
+    env:
+      VMT_FRONTEND_PREBUILT: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+      - uses: actions/download-artifact@v4
+        with:
+          name: vmt-frontend
+          path: videomerge/web
+      - if: runner.os == 'Windows'
         run: choco install innosetup --no-progress -y
-
-      - name: Build executable on Windows
-        if: runner.os == 'Windows'
+      - if: runner.os == 'Windows'
         shell: pwsh
         env:
           WINDOWS_CERTIFICATE_BASE64: ${{ secrets.WINDOWS_CERTIFICATE_BASE64 }}
           WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
-        run: .\scripts\build_windows.ps1
-
-      - name: Build app on macOS
-        if: runner.os == 'macOS'
+        run: |
+          ./scripts/build_windows.ps1
+          if ($LASTEXITCODE -ne 0) { throw "Packaging failed" }
+          python scripts/smoke_test.py dist/VideoMergingTool.exe
+      - if: runner.os == 'Linux'
         run: |
           bash scripts/build_local.sh
-          mv dist/VideoMergingTool.dmg "${{ matrix.package_path }}"
-
-      - name: Build executable on Linux
-        if: runner.os == 'Linux'
-        run: bash scripts/build_local.sh
-
-      - name: Upload build artifact
-        uses: actions/upload-artifact@v4
+          python scripts/smoke_test.py dist/VideoMergingTool
+      - uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.artifact_name }}
-          path: ${{ matrix.package_path }}
+          name: VideoMergingTool-${{ matrix.label }}
+          path: ${{ matrix.path }}
           if-no-files-found: error
-
+  build-macos:
+    if: github.event_name != 'pull_request' && needs.plan.outputs.macos == 'true'
+    needs: [plan, frontend, test]
+    runs-on: macos-15
+    env:
+      VMT_FRONTEND_PREBUILT: "1"
+      MACOS_TARGET_ARCH: universal2
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: vmt-frontend
+          path: videomerge/web
+      - name: Install verified Universal 2 Python
+        run: bash scripts/setup_macos_python.sh
+      - name: Build Universal 2 application and DMG
+        run: |
+          bash scripts/build_local.sh
+          mv dist/VideoMergingTool.dmg dist/VideoMergingTool-macos-universal.dmg
+      - uses: actions/upload-artifact@v4
+        with:
+          name: VideoMergingTool-macos-universal
+          path: dist/VideoMergingTool-macos-universal.dmg
+          if-no-files-found: error
+  verify-macos:
+    name: Verify universal DMG on ${{ matrix.os }}
+    needs: build-macos
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-15
+            arch: arm64
+          - os: macos-15-intel
+            arch: x86_64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - uses: actions/download-artifact@v4
+        with:
+          name: VideoMergingTool-macos-universal
+          path: package
+      - name: Verify and run the exact release DMG
+        env:
+          EXPECTED_ARCH: ${{ matrix.arch }}
+        run: |
+          mountpoint="$(mktemp -d "$RUNNER_TEMP/vmt-dmg.XXXXXX")"
+          hdiutil attach package/VideoMergingTool-macos-universal.dmg -readonly -nobrowse -mountpoint "$mountpoint"
+          trap 'hdiutil detach "$mountpoint"' EXIT
+          python scripts/verify_bundle.py "$mountpoint/VideoMergingTool.app" --universal
+          python scripts/smoke_test.py "$mountpoint/VideoMergingTool.app/Contents/MacOS/VideoMergingTool" --expected-arch "$EXPECTED_ARCH"
   release:
-    name: Publish GitHub Release
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: build
+    needs: [build-native, verify-macos]
     runs-on: ubuntu-latest
     permissions:
-      actions: read
       contents: write
-
     steps:
-      - name: Download build artifacts
-        uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v4
         with:
+          pattern: VideoMergingTool-*
           path: release-assets
-
-      - name: Upload release assets
-        uses: softprops/action-gh-release@v2
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
         with:
           files: release-assets/**/*
           generate_release_notes: true

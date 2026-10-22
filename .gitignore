@@ -1,5 +1,9 @@
 .venv/
+.venv-build/
+frontend/node_modules/
+videomerge/web/
 .tools/
+.learnings/
 __pycache__/
 *.py[cod]
 .DS_Store

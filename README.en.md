@@ -18,22 +18,31 @@
 
 ---
 
-VideoMergingTool helps you combine many video clips into longer videos without uploading your files anywhere. It is designed for everyday desktop use: install the app, choose a folder, review the detected videos, pick a merge mode, and start.
+VideoMergingTool helps you combine video clips into longer videos without uploading your files anywhere. It is designed for everyday desktop use: install the app, choose a folder or specific video files, review the detected videos, pick a merge mode, and start.
+
+Current version: `6.0.0`. See the [6.0.0 release notes (Chinese)](docs/releases/v6.0.0.md) and download installers from the [Releases page](https://github.com/yibailiu/VideoMergingTool/releases).
+
+Version 6 rebuilds the desktop UI with Vue 3, Element Plus, and AG Grid Community. It adds sampled/full input checks and an explicit stop-or-skip policy for damaged videos. See [6.0.0 notes](docs/6.0.0.md) for architecture and development details.
 
 The packaged Windows and macOS apps include FFmpeg and FFprobe, so normal users do not need to install FFmpeg manually.
 
 ## What It Does
 <p align="center">
-  <img src="assets/screenshots/screenshot_en.png" width="960" alt="VideoMergingTool 图标">
+  <img src="assets/screenshots/screenshot_6_en.png" width="960" alt="VideoMergingTool 6.0.0 workspace and task result">
 </p>
 
-- Finds common video files in a folder, including `mp4`, `mkv`, `mov`, `avi`, `ts`, `m4v`, `flv`, and `webm`
+- Scans a folder or lets you select one or more specific videos; supports `mp4`, `mkv`, `mov`, `avi`, `ts`, `m4v`, `flv`, `webm`, and `wmv`
 - Shows useful details such as duration, resolution, codec, FPS, and status
+- Auto-sizes every video-table column except the filename to fit its content; visible header grips support custom resizing, double-click restores automatic sizing, and widths are saved for the next launch
+- Localizes file and folder picker captions and filters; Chinese systems prefer Chinese text
+- Opens a source in the system video player and lets you mark rotation or exclusion without modifying the source file or list order
 - Merges videos in a predictable order, with common sorting options
 - Supports landscape and portrait videos
 - Keeps the original picture visible when resizing is needed; it pads instead of cropping
 - Lets you choose output folder, temp folder, language, merge mode, GPU option, and whether to keep temp files
-- Shows process logs and progress inside the app window
+- Shows complete process logs and progress inside the app window
+- Offers metadata, sampled, or full decode checks before merging; a sampled pass does not guarantee the entire video is undamaged
+- Can stop on damaged inputs or skip them and continue, with a partial-completion result, skipped-file reasons, and full log export
 - Runs locally in a desktop window, without opening an external browser
 
 ## Download
@@ -43,15 +52,14 @@ Go to the [Releases page](https://github.com/yibailiu/VideoMergingTool/releases)
 | System | File to download | How to install |
 | --- | --- | --- |
 | Windows | `VideoMergingTool-Setup.exe` | Run the installer, then open the app from Start Menu or the desktop shortcut. |
-| macOS Apple Silicon | `VideoMergingTool-macos-apple-silicon.dmg` | Open the DMG and drag the app into Applications. |
-| macOS Intel | `VideoMergingTool-macos-intel.dmg` | Open the DMG and drag the app into Applications. |
+| macOS (Apple Silicon / Intel universal) | `VideoMergingTool-macos-universal.dmg` | Open the DMG and drag the app into Applications. |
 | Linux | `VideoMergingTool` | Download the executable and run it directly. |
 
 ## Quick Start
 
 1. Open VideoMergingTool.
-2. Click **Select Folder** and choose the folder that contains your videos.
-3. Confirm the detected files and merge order.
+2. Click **Select Folder** to scan a whole folder, or **Select Files** to add only the videos you choose.
+3. Confirm the detected files and merge order. Landscape/portrait groups are visual only; the merge uses one global sort order. Drag a header boundary to resize its column. Choose input checks and failure handling; the defaults are quick sampling and stop on failure.
 4. Choose a merge mode:
    - **Fast Merge** for compatible files when you want the fastest lossless merge.
    - **Optimal Merge** for mixed landscape or portrait files in most normal cases.
@@ -69,13 +77,15 @@ Go to the [Releases page](https://github.com/yibailiu/VideoMergingTool/releases)
 
 If you are not sure, start with **Optimal Merge**.
 
+When WMV or another source has an audio codec that MP4 cannot contain, **Optimal Merge** and **Extreme Merge** re-encode the audio when needed (for example, to AAC) instead of copying an incompatible stream. **Fast Merge** uses stream copy only and cannot re-encode incompatible audio.
+
 ## Settings Reference
 
 Most users can use the desktop controls without typing any command. The table below explains what each important option means. The CLI option is included for users who automate the app.
 
 | App setting | CLI option | What it means |
 | --- | --- | --- |
-| Source Folder | `input_dir` | The folder that contains the videos you want to merge. |
+| Source Folder | `input_dir` | The folder that contains the videos you want to merge. The app's **Select Files** option processes only the chosen files. |
 | Merge Mode | `--mode fast\|optimal\|extreme` | Chooses the merge strategy. Use `optimal` when unsure. |
 | Output Folder | `--output-dir PATH` | Where merged videos are saved. If left as default, the app uses a `merged` folder under the source folder. |
 | Output Format | `--output-format mp4\|mkv\|mov\|avi\|ts\|webm` | The container format of the merged output. `mp4` is the safest default for most users. |
@@ -87,15 +97,20 @@ Most users can use the desktop controls without typing any command. The table be
 | Temp Folder | `--temp-dir PATH` | Where temporary processing files are stored. Choose a fast disk with enough free space for large batches. |
 | Dry Run | `--dry-run` | Shows the planned work without actually running FFmpeg. |
 | GPU Acceleration | `--gpu off\|auto\|nvenc\|qsv\|amf\|videotoolbox` | Uses hardware encoding when available. `auto` is convenient; `off` is safest for compatibility. |
-| Target Video Codec | `--video-codec TEXT` | Overrides the output video codec. Leave default for H.264, or VP9 when output format is WebM. |
-| Target Audio Codec | `--audio-codec TEXT` | Overrides the output audio codec. Leave default unless your playback device requires a specific codec. |
-| Quality | `--crf 0-51` | Controls transcode quality. Lower values usually mean better quality and larger files. Default is `20`. |
-| Encoder Preset | `--preset TEXT` | Controls encoding speed and compression. `medium` is the default balance. |
+| GPU Concurrent Jobs | `--gpu-workers 1-3` | Defaults to `1` to avoid GPU contention. Increase it manually on high-end hardware. |
+| Target Video Codec | `--video-codec TEXT` | Overrides the output video codec. Auto preserves the dominant source codec when compatible with the output container. |
+| Target Audio Codec | `--audio-codec TEXT` | Overrides the output audio codec. Compatible source audio is copied when possible; audio such as WMAV2 is converted to AAC for MP4. |
+| Quality Profile | `--quality-profile balanced\|high\|small` | Selects the size, clarity, and speed strategy. Default is `balanced`. |
+| Quality | `--crf 0-51` | Overrides the quality profile CRF. Lower values usually mean better quality and larger files. Balanced defaults to `23`. |
+| Encoder Preset | `--preset TEXT` | Overrides the quality profile encoder preset. Balanced defaults to `medium`. |
 | FPS Policy | `--fps-policy majority\|max\|min` | Chooses the target frame rate for transcode modes. `majority` is usually best. |
+| Resolution Policy | `--resolution-policy dominant\|largest` | Defaults to `dominant` to minimize transcoding. `largest` keeps the previous largest-canvas behavior. |
 | Padding Color | `--pad-color TEXT` | Color used when the app needs to add borders instead of cropping the image. Default is `black`. |
 | FFmpeg Path | `--ffmpeg-path PATH` | Optional manual path to `ffmpeg`. Packaged apps normally use the bundled copy. |
 | FFprobe Path | `--ffprobe-path PATH` | Optional manual path to `ffprobe`. Packaged apps normally use the bundled copy. |
 | Auto Download Deps | `--auto-download-deps` / `--no-auto-download-deps` | Source runs can download FFmpeg when missing. Packaged apps already include it. |
+| Input Check | `--check-level basic\|quick\|full` | Defaults to sampled checks. Full checks decode the entire input; sampling cannot guarantee integrity outside the checked regions. |
+| Damaged Input Policy | `--on-error stop\|skip` | Defaults to stop. Skip applies only to confirmed damaged inputs; task-level errors such as permissions or disk failures still stop processing. |
 
 Sort order values:
 
@@ -105,8 +120,8 @@ Sort order values:
 | `name-natural-desc` | Natural filename order, Z to A. |
 | `name-asc` | Plain filename order, A to Z. Example: `1, 10, 2`. |
 | `name-desc` | Plain filename order, Z to A. |
-| `modified-asc` | Oldest modified file first. |
-| `modified-desc` | Newest modified file first. |
+| `media-created-asc` | Oldest media creation date first; files without media dates are placed last. |
+| `media-created-desc` | Newest media creation date first; files without media dates are placed last. |
 | `size-asc` | Smallest file first. |
 | `size-desc` | Largest file first. |
 
@@ -139,6 +154,8 @@ VideoMergingTool merge /path/to/videos --mode optimal
 Source runs are intended for testing and development:
 
 ```bash
+npm --prefix frontend ci
+npm --prefix frontend run build
 python main.py gui
 python main.py merge /path/to/videos --mode optimal
 ```

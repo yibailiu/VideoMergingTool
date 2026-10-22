@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import platform
 import tempfile
 import unittest
 from pathlib import Path
@@ -26,7 +27,7 @@ class EnvCheckTests(unittest.TestCase):
 
     def test_find_binary_prefers_bundled_binary_in_frozen_app(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
-            bundled = Path(temp_dir) / "ffmpeg" / "ffmpeg"
+            bundled = Path(temp_dir) / "ffmpeg" / ("ffmpeg.exe" if platform.system() == "Windows" else "ffmpeg")
             bundled.parent.mkdir()
             bundled.touch()
 

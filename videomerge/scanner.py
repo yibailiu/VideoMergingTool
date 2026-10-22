@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import os
 import re
 from pathlib import Path
+from typing import Iterable
+
+from .models import VideoFile
 
 
 VIDEO_EXTENSIONS = {
@@ -13,6 +17,7 @@ VIDEO_EXTENSIONS = {
     ".m4v",
     ".flv",
     ".webm",
+    ".wmv"
 }
 
 SORT_OPTIONS = {
@@ -20,24 +25,55 @@ SORT_OPTIONS = {
     "name-natural-desc",
     "name-asc",
     "name-desc",
-    "modified-asc",
-    "modified-desc",
+    "media-created-asc",
+    "media-created-desc",
     "size-asc",
     "size-desc",
 }
 
 
-def scan_video_files(input_dir: Path, recursive: bool, sort_by: str = "name-natural-asc") -> list[Path]:
+def scan_video_files(
+    input_dir: Path,
+    recursive: bool,
+    sort_by: str = "name-natural-asc",
+    excluded_dirs: Iterable[Path] = (),
+) -> list[Path]:
     pattern = "**/*" if recursive else "*"
+    root = Path(os.path.abspath(input_dir))
+    excluded_list: list[Path] = []
+    for path in excluded_dirs:
+        candidate = Path(os.path.abspath(path.expanduser()))
+        try:
+            candidate.relative_to(root)
+        except ValueError:
+            continue
+        if candidate != root:
+            excluded_list.append(candidate)
+    excluded = tuple(excluded_list)
     files = [
         path
         for path in input_dir.glob(pattern)
-        if path.is_file() and path.suffix.lower() in VIDEO_EXTENSIONS
+        if path.is_file()
+        and path.suffix.lower() in VIDEO_EXTENSIONS
+        and not _is_below_any(path, excluded)
     ]
-    return _sort_video_files(files, input_dir, sort_by)
+    return sort_video_paths(files, input_dir, sort_by)
 
 
-def _sort_video_files(files: list[Path], input_dir: Path, sort_by: str) -> list[Path]:
+def _is_below_any(path: Path, directories: tuple[Path, ...]) -> bool:
+    if not directories:
+        return False
+    resolved = Path(os.path.abspath(path))
+    for directory in directories:
+        try:
+            resolved.relative_to(directory)
+            return True
+        except ValueError:
+            continue
+    return False
+
+
+def sort_video_paths(files: list[Path], input_dir: Path, sort_by: str) -> list[Path]:
     if sort_by not in SORT_OPTIONS:
         raise ValueError(f"Unsupported sort option: {sort_by}")
 
@@ -46,9 +82,8 @@ def _sort_video_files(files: list[Path], input_dir: Path, sort_by: str) -> list[
         return sorted(files, key=lambda path: _natural_path_key(path, input_dir), reverse=reverse)
     if sort_by.startswith("name-"):
         return sorted(files, key=lambda path: _casefold_path_key(path, input_dir), reverse=reverse)
-    if sort_by.startswith("modified-"):
-        natural_sorted = sorted(files, key=lambda path: _natural_path_key(path, input_dir))
-        return sorted(natural_sorted, key=lambda path: path.stat().st_mtime, reverse=reverse)
+    if sort_by.startswith("media-created-"):
+        return sorted(files, key=lambda path: _natural_path_key(path, input_dir))
     if sort_by.startswith("size-"):
         natural_sorted = sorted(files, key=lambda path: _natural_path_key(path, input_dir))
         return sorted(natural_sorted, key=lambda path: path.stat().st_size, reverse=reverse)
@@ -61,6 +96,20 @@ def _casefold_path_key(path: Path, root: Path) -> str:
     except ValueError:
         relative = path
     return str(relative).casefold()
+
+
+def sort_probed_files(files: list[VideoFile], input_dir: Path, sort_by: str) -> list[VideoFile]:
+    if not sort_by.startswith("media-created-"):
+        return files
+
+    natural_sorted = sorted(files, key=lambda file: _natural_path_key(file.path, input_dir))
+    dated = [file for file in natural_sorted if file.media_created_at is not None]
+    undated = [file for file in natural_sorted if file.media_created_at is None]
+    return sorted(
+        dated,
+        key=lambda file: file.media_created_at or 0.0,
+        reverse=sort_by.endswith("-desc"),
+    ) + undated
 
 
 def _natural_path_key(path: Path, root: Path) -> tuple[tuple[int, object], ...]:

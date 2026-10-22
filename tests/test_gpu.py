@@ -28,10 +28,21 @@ class GpuTests(unittest.TestCase):
         self.assertNotIn("-crf", args)
         self.assertIn("p7", args)
 
+    def test_windows_gpu_encoders_apply_source_bitrate_limit(self) -> None:
+        for encoder in ("h264_nvenc", "h264_qsv", "h264_amf"):
+            with self.subTest(encoder=encoder):
+                args = gpu_encoder_quality_args(
+                    encoder, 20, "medium", 1920, 1080, 30, source_bitrate=4_000_000
+                )
+
+                self.assertEqual(args[args.index("-b:v") + 1], "4000k")
+                self.assertEqual(args[args.index("-maxrate") + 1], "4000k")
+                self.assertEqual(args[args.index("-bufsize") + 1], "8000k")
+
     def test_cpu_h264_quality_args_use_crf(self) -> None:
         args = gpu_encoder_quality_args("libx264", 18, "slow")
 
-        self.assertEqual(args, ["-crf", "18", "-preset", "slow"])
+        self.assertEqual(args, ["-crf", "18", "-preset", "slow", "-profile:v", "high"])
 
     def test_mpeg4_quality_args_use_qscale_not_crf(self) -> None:
         args = gpu_encoder_quality_args("mpeg4", 10, "medium")
@@ -57,6 +68,32 @@ class GpuTests(unittest.TestCase):
         self.assertIn("-b:v", args)
         self.assertIn("-allow_sw", args)
         self.assertNotIn("-crf", args)
+
+    def test_videotoolbox_balanced_quality_uses_dominant_source_bitrate(self) -> None:
+        args = gpu_encoder_quality_args(
+            "h264_videotoolbox",
+            23,
+            "medium",
+            3840,
+            2160,
+            30,
+            source_bitrate=4_000_000,
+        )
+
+        self.assertEqual(args[args.index("-b:v") + 1], "4000k")
+        self.assertEqual(args[args.index("-maxrate") + 1], "4000k")
+
+    def test_videotoolbox_high_quality_does_not_exceed_source_bitrate(self) -> None:
+        args = gpu_encoder_quality_args(
+            "h264_videotoolbox", 20, "medium", 1920, 1080, 30, source_bitrate=2_000_000
+        )
+
+        self.assertEqual(args[args.index("-b:v") + 1], "2000k")
+
+    def test_videotoolbox_4k_fallback_no_longer_uses_60_mbps(self) -> None:
+        args = gpu_encoder_quality_args("h264_videotoolbox", 23, "medium", 3840, 2160, 30)
+
+        self.assertLess(int(args[args.index("-b:v") + 1].removesuffix("k")), 30_000)
 
     def test_unsupported_codec_falls_back_to_cpu(self) -> None:
         tools = ToolPaths(ffmpeg=Path("ffmpeg"), ffprobe=Path("ffprobe"))
