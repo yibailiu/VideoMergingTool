@@ -17,7 +17,7 @@ fi
 PYTHON="${VMT_PYTHON_BINARY:-python3}"
 MACOS_TARGET_ARCH="${MACOS_TARGET_ARCH:-universal2}"
 if [[ "$(uname -s)" == "Darwin" && "$MACOS_TARGET_ARCH" == "universal2" ]]; then
-  lipo -verify_arch x86_64 arm64 "$("$PYTHON" -c 'import sys; print(sys.executable)')"
+  "$PYTHON" "$PROJECT_ROOT/scripts/verify_python_architecture.py"
 fi
 "$PYTHON" -m venv .venv-build
 BUILD_PYTHON="$PROJECT_ROOT/.venv-build/bin/python"

@@ -18,7 +18,7 @@ sudo installer -pkg "$PACKAGE_PATH" -target /
 PYTHON_SERIES="${PYTHON_VERSION%.*}"
 PYTHON_BINARY="/Library/Frameworks/Python.framework/Versions/$PYTHON_SERIES/bin/python$PYTHON_SERIES"
 "$PYTHON_BINARY" -c 'import sys; print(sys.version)'
-lipo -verify_arch x86_64 arm64 "$PYTHON_BINARY"
+"$PYTHON_BINARY" "$PROJECT_ROOT/scripts/verify_python_architecture.py"
 echo "VMT_PYTHON_BINARY=$PYTHON_BINARY" >> "$GITHUB_ENV"
 echo "MACOSX_DEPLOYMENT_TARGET=13.0" >> "$GITHUB_ENV"
 echo "ARCHFLAGS=-arch x86_64 -arch arm64" >> "$GITHUB_ENV"
