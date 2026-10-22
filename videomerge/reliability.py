@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import subprocess
 import threading
 import time
@@ -13,6 +14,30 @@ from pathlib import Path
 from .errors import CommandError, VideoMergeError
 from .models import ToolPaths, VideoFile
 from .utils import subprocess_window_kwargs
+
+
+_NULL_DTS_WARNING = re.compile(
+    r"\[null @ [0-9a-fA-F]+\] Application provided invalid, non monotonically increasing "
+    r"dts to muxer in stream \d+: -?\d+ >= -?\d+"
+)
+
+
+def _check_diagnostics(stream, path: Path) -> tuple[str, str]:
+    """Scan all diagnostics; bound stored text, never hide later decode errors."""
+    unexpected, timestamp_warnings = "", 0
+    for raw in stream:
+        line = raw.decode("utf-8", errors="replace").strip()
+        if not line:
+            continue
+        # The UI summary is bounded, but the UTF-8 process log keeps every line.
+        logging.getLogger("videomerge").debug("Input check [%s]: %s", path, line)
+        if _NULL_DTS_WARNING.fullmatch(line):
+            timestamp_warnings += 1
+        elif len(unexpected) < 8192:
+            unexpected += ("\n" if unexpected else "") + line[:8192 - len(unexpected)]
+    warning = (f"Null-output timestamp warning(s): {timestamp_warnings}; "
+               "these alone are not evidence of damaged frames.") if timestamp_warnings else ""
+    return unexpected, warning
 
 
 @dataclass
@@ -33,6 +58,7 @@ def check_video(file: VideoFile, tools: ToolPaths, level: str = "quick") -> Heal
     if duration <= 0:
         return HealthResult(str(file.path), "unknown", level, "No reliable duration is available for a bounded integrity check.")
     positions = [0.0] if level == "full" or duration <= 9 else [0.0, duration / 2, max(0, duration - 3)]
+    warnings = []
     for position in positions:
         args = [str(tools.ffmpeg), "-hide_banner", "-v", "error", "-nostdin", "-xerror", "-threads", "2"]
         if position:
@@ -40,7 +66,9 @@ def check_video(file: VideoFile, tools: ToolPaths, level: str = "quick") -> Heal
         args += ["-i", str(file.path), "-map", "0:v:0", "-map", "0:a:0?"]
         if level == "quick" and duration > 9:
             args += ["-t", "3"]
-        args += ["-threads", "2", "-progress", "pipe:1", "-nostats", "-f", "null", "-"]
+        # Do not quantize VFR frames to the guessed nominal frame-rate timebase.
+        args += ["-fps_mode", "passthrough", "-enc_time_base:v", "1/1000000",
+                 "-threads", "2", "-progress", "pipe:1", "-nostats", "-f", "null", "-"]
         try:
             # A temporary diagnostic stream prevents unbounded stderr accumulation.
             import tempfile
@@ -49,19 +77,28 @@ def check_video(file: VideoFile, tools: ToolPaths, level: str = "quick") -> Heal
                                          timeout=30 if level == "quick" else max(120, duration * 3),
                                          **subprocess_window_kwargs())
                 diagnostics.seek(0)
-                reason = diagnostics.read(8192).decode("utf-8", errors="replace").strip()
+                reason, warning = _check_diagnostics(diagnostics, file.path)
                 progress.seek(0)
-                times = [line.partition(b"=")[2].strip() for line in progress if line.startswith(b"out_time_us=")]
+                decoded = None
+                for line in progress:
+                    if line.startswith(b"out_time_us="):
+                        value = line.partition(b"=")[2].strip()
+                        if value.lstrip(b"-").isdigit():
+                            seconds = int(value) / 1_000_000
+                            decoded = seconds if decoded is None else max(decoded, seconds)
             if process.returncode or reason:
                 status = "error" if is_input_failure(reason) else "unknown"
-                return HealthResult(str(file.path), status, level, reason or f"Decoder exit {process.returncode}", time.monotonic() - started)
-            decoded = max((int(value) / 1_000_000 for value in times if value.lstrip(b"-").isdigit()), default=None)
+                return HealthResult(str(file.path), status, level, reason or f"Decoder exit {process.returncode}. {warning}", time.monotonic() - started)
+            if warning:
+                warnings.append(warning)
+            if decoded is None:
+                return HealthResult(str(file.path), "unknown", level, "Decoder produced no verifiable timing progress.", time.monotonic() - started)
             expected = min(3, duration - position) if level == "quick" and duration > 9 else duration
             if decoded is not None and decoded + max(1.0, expected * 0.001) < expected:
                 return HealthResult(str(file.path), "error", level, f"Truncated input: decoded {decoded:.2f}s, expected {expected:.2f}s in checked interval.", time.monotonic() - started)
         except subprocess.TimeoutExpired:
             return HealthResult(str(file.path), "unknown", level, "Check timed out; integrity could not be determined.", time.monotonic() - started)
-    return HealthResult(str(file.path), "passed", level, elapsed=time.monotonic() - started)
+    return HealthResult(str(file.path), "passed", level, reason=" ".join(dict.fromkeys(warnings)), elapsed=time.monotonic() - started)
 
 
 @dataclass
@@ -129,6 +166,8 @@ class TaskRun:
 
     def inspect(self, file: VideoFile, tools: ToolPaths, level: str | None = None) -> HealthResult:
         result = check_video(file, tools, level or self.check_level)
+        if result.status == "passed" and result.reason:
+            self.logger.warning("Input check warning for %s: %s", file.path, result.reason)
         with self.lock:
             self.checks[str(file.path)] = result
             self.sources[file.path] = file

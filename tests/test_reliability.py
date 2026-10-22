@@ -97,7 +97,11 @@ class ReliabilityTests(unittest.TestCase):
             current_run.reset(token)
 
     def test_quick_checks_three_intervals_and_full_has_no_sampling_limit(self):
-        with patch("videomerge.reliability.subprocess.run", return_value=subprocess.CompletedProcess([], 0)) as execute:
+        def decode(args, **kwargs):
+            duration = 3 if "-t" in args else 60
+            kwargs["stdout"].write(f"out_time_us={duration * 1000000}\n".encode())
+            return subprocess.CompletedProcess(args, 0)
+        with patch("videomerge.reliability.subprocess.run", side_effect=decode) as execute:
             self.assertEqual(check_video(_video(Path("a.mp4"), 60), TOOLS).status, "passed")
             self.assertEqual(execute.call_count, 3)
             self.assertEqual([call.args[0][call.args[0].index("-ss") + 1] for call in execute.call_args_list[1:]], ["30.000", "57.000"])
@@ -105,6 +109,33 @@ class ReliabilityTests(unittest.TestCase):
             check_video(_video(Path("a.mp4"), 60), TOOLS, "full")
             self.assertEqual(execute.call_count, 1)
             self.assertNotIn("-t", execute.call_args.args[0])
+
+    def test_only_null_sink_timestamp_messages_do_not_mark_decodable_video_as_bad(self):
+        warning = b"[null @ 000002596060ad40] Application provided invalid, non monotonically increasing dts to muxer in stream 0: 3 >= 3\n"
+        def decode(args, **kwargs):
+            self.assertIn("passthrough", args)
+            self.assertIn("1/1000000", args)
+            kwargs["stdout"].write(b"out_time_us=10000000\n")
+            kwargs["stderr"].write(warning * 200)
+            return subprocess.CompletedProcess(args, 0)
+        with patch("videomerge.reliability.subprocess.run", side_effect=decode):
+            result = check_video(_video(Path("vfr.mp4"), 10), TOOLS, "full")
+        self.assertEqual(result.status, "passed")
+        self.assertIn("timestamp warning", result.reason)
+
+    def test_decoder_error_after_many_timestamp_messages_is_not_hidden(self):
+        def decode(args, **kwargs):
+            kwargs["stderr"].write((b"[null @ abc] Application provided invalid, non monotonically increasing dts to muxer in stream 0: 3 >= 3\n" * 200) + b"Error while decoding stream: Invalid data\n")
+            return subprocess.CompletedProcess(args, 1)
+        with patch("videomerge.reliability.subprocess.run", side_effect=decode):
+            result = check_video(_video(Path("bad.mp4"), 10), TOOLS)
+        self.assertEqual(result.status, "error")
+        self.assertIn("Invalid data", result.reason)
+
+    def test_empty_progress_and_nonzero_exit_still_fail_the_check(self):
+        for code in (0, 1):
+            with self.subTest(code=code), patch("videomerge.reliability.subprocess.run", return_value=subprocess.CompletedProcess([], code)):
+                self.assertEqual(check_video(_video(Path("a.mp4"), 10), TOOLS).status, "unknown")
 
     def test_timeout_is_not_reported_as_confirmed_corruption(self):
         with patch("videomerge.reliability.subprocess.run", side_effect=subprocess.TimeoutExpired("ffmpeg", 30)):
