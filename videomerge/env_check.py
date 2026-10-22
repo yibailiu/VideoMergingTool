@@ -9,6 +9,7 @@ import ssl
 import stat
 import sys
 import tarfile
+import time
 import urllib.request
 import zipfile
 from pathlib import Path
@@ -195,13 +196,45 @@ def _system_binary_candidates(name: str) -> list[Path]:
 
 def _download(url: str, output: Path, logger: logging.Logger, checksum_env: str | None = None, expected_sha256: str | None = None) -> None:
     logger.info("Downloading %s", url)
-    try:
-        request = urllib.request.Request(url, headers={"User-Agent": "VideoMergingTool/6.0 dependency-installer"})
-        with urllib.request.urlopen(request, context=_ssl_context(), timeout=60) as response, output.open("wb") as file:
-            shutil.copyfileobj(response, file)
-    except Exception as exc:  # pragma: no cover - depends on network.
-        raise DependencyError(f"Failed to download {url}: {exc}") from exc
-    _verify_download_checksum(output, checksum_env, logger, expected_sha256)
+    partial = output.with_name(output.name + ".part")
+    for attempt in range(3):
+        try:
+            request = urllib.request.Request(url, headers={
+                "User-Agent": "VideoMergingTool/6.0 dependency-installer", "Cache-Control": "no-cache",
+            })
+            with urllib.request.urlopen(request, context=_ssl_context(), timeout=60) as response:
+                if response.status != 200:
+                    raise DependencyError(f"Expected complete HTTP 200 download, received {response.status}")
+                content_type = response.headers.get("Content-Type", "").lower()
+                if "text/html" in content_type or "application/json" in content_type:
+                    raise DependencyError(f"Download server returned {content_type}, not an archive")
+                length = response.headers.get("Content-Length")
+                with partial.open("wb") as file:
+                    shutil.copyfileobj(response, file)
+            if length and partial.stat().st_size != int(length):
+                raise DependencyError(f"Incomplete download: expected {length} bytes, received {partial.stat().st_size}")
+            _verify_download_checksum(partial, checksum_env, logger, expected_sha256)
+            _validate_download_archive(partial, output.name)
+            partial.replace(output)
+            return
+        except Exception as exc:
+            partial.unlink(missing_ok=True)
+            if attempt == 2:
+                raise DependencyError(f"Failed to download a valid archive from {url} after 3 attempts: {exc}") from exc
+            logger.warning("Download attempt %s/3 failed: %s; retrying.", attempt + 1, exc)
+            time.sleep(attempt + 1)
+
+
+def _validate_download_archive(path: Path, filename: str) -> None:
+    if filename.endswith(".zip"):
+        with zipfile.ZipFile(path) as archive:
+            damaged = archive.testzip()
+            if damaged:
+                raise DependencyError(f"Archive CRC check failed: {damaged}")
+    elif filename.endswith(".tar.xz"):
+        with tarfile.open(path, mode="r:xz") as archive:
+            if not archive.getmembers():
+                raise DependencyError("Downloaded archive is empty")
 
 
 def _verify_download_checksum(path: Path, checksum_env: str | None, logger: logging.Logger, expected_sha256: str | None = None) -> None:
