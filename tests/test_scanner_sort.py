@@ -32,7 +32,7 @@ class ScannerSortTests(unittest.TestCase):
             files = scan_video_files(root, recursive=True)
 
         self.assertEqual(
-            [str(file.relative_to(root)) for file in files],
+            [file.relative_to(root).as_posix() for file in files],
             ["part1/clip2.mp4", "part1/clip10.mp4", "part2/clip1.mp4", "part10/clip1.mp4"],
         )
 
@@ -81,7 +81,7 @@ class ScannerSortTests(unittest.TestCase):
             )
 
         self.assertCountEqual(
-            [str(path.relative_to(root)) for path in files],
+            [path.relative_to(root).as_posix() for path in files],
             ["01.mp4", "source/02.mp4"],
         )
 

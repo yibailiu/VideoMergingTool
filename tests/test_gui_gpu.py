@@ -166,7 +166,7 @@ class GuiGpuTests(unittest.TestCase):
         ) as popen:
             _open_media_file(Path("/tmp/clip.mp4"))
 
-        self.assertEqual(popen.call_args.args[0], ["open", "/tmp/clip.mp4"])
+        self.assertEqual(popen.call_args.args[0], ["open", str(Path("/tmp/clip.mp4"))])
 
     def test_open_media_file_uses_windows_file_association(self) -> None:
         with patch("videomerge.gui.platform.system", return_value="Windows"), patch(
@@ -175,7 +175,7 @@ class GuiGpuTests(unittest.TestCase):
         ) as startfile:
             _open_media_file(Path("C:/clips/clip.mp4"))
 
-        startfile.assert_called_once_with("C:/clips/clip.mp4")
+        startfile.assert_called_once_with(str(Path("C:/clips/clip.mp4")))
 
     def test_windows_notification_script_uses_notify_icon_and_sound(self) -> None:
         script = _windows_notification_script("A&B's", "done", True)
