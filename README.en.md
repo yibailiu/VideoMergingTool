@@ -20,7 +20,7 @@
 
 VideoMergingTool helps you combine video clips into longer videos without uploading your files anywhere. It is designed for everyday desktop use: install the app, choose a folder or specific video files, review the detected videos, pick a merge mode, and start.
 
-Current version: `6.0.0`. See the [6.0.0 release notes (Chinese)](docs/releases/v6.0.0.md) and download installers from the [Releases page](https://github.com/yibailiu/VideoMergingTool/releases).
+Current development version: `6.0.0` (fixes under validation; version unchanged). See the [6.0.0 notes (Chinese)](docs/releases/v6.0.0.md). Published installer availability is shown on the [Releases page](https://github.com/yibailiu/VideoMergingTool/releases).
 
 Version 6 rebuilds the desktop UI with Vue 3, Element Plus, and AG Grid Community. It adds sampled/full input checks and an explicit stop-or-skip policy for damaged videos. See [6.0.0 notes](docs/6.0.0.md) for architecture and development details.
 
@@ -28,7 +28,7 @@ The packaged Windows and macOS apps include FFmpeg and FFprobe, so normal users 
 
 ## What It Does
 <p align="center">
-  <img src="assets/screenshots/screenshot_6_en.png" width="960" alt="VideoMergingTool 6.0.0 workspace and task result">
+  <img src="assets/screenshots/screenshot_6_en.png" width="960" alt="Updated 6.0.0 workspace with the original app icon, full-log copying, subfolder scanning under Output, and aligned progress bar">
 </p>
 
 - Scans a folder or lets you select one or more specific videos; supports `mp4`, `mkv`, `mov`, `avi`, `ts`, `m4v`, `flv`, `webm`, and `wmv`
@@ -42,7 +42,7 @@ The packaged Windows and macOS apps include FFmpeg and FFprobe, so normal users 
 - Lets you choose output folder, temp folder, language, merge mode, GPU option, and whether to keep temp files
 - Shows complete process logs and progress inside the app window
 - Offers metadata, sampled, or full decode checks before merging; a sampled pass does not guarantee the entire video is undamaged
-- Can stop on damaged inputs or skip them and continue, with a partial-completion result, skipped-file reasons, and full log export
+- Can stop on damaged inputs or skip them and continue, with partial-completion results, skipped-file reasons, full-log clipboard copying, and a selectable full-log view
 - Runs locally in a desktop window, without opening an external browser
 
 ## Download

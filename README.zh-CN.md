@@ -20,13 +20,13 @@
 
 VideoMergingTool 用来把一个文件夹里的多个视频批量合并成更长的视频。它面向普通桌面用户设计：安装应用，选择视频文件夹，确认识别结果，选择合并模式，然后开始合并。
 
-当前版本为 `6.0.0`，使用 Vue 3、Element Plus 和 AG Grid Community 重构界面，支持直接选择文件、视频抽检和损坏时跳过继续。最新完整说明见 [中文首页](README.md)、[6.0.0 发布说明](docs/releases/v6.0.0.md) 和 [架构说明](docs/6.0.0.md)。
+当前开发版本为 `6.0.0`（修复验证中，版本号不变），使用 Vue 3、Element Plus 和 AG Grid Community 重构界面，支持直接选择文件、视频抽检和损坏时跳过继续。最新完整说明见 [中文首页](README.md)、[6.0.0 说明](docs/releases/v6.0.0.md) 和 [架构说明](docs/6.0.0.md)。
 
 Windows 和 macOS 安装包已经内置 FFmpeg / FFprobe，普通用户不需要手动安装 FFmpeg，也不需要配置环境变量。
 
 ## 它能做什么
 <p align="center">
-  <img src="assets/screenshots/screenshot_6_zhCN.png" width="960" alt="VideoMergingTool 6.0.0 视频工作区与任务结果">
+  <img src="assets/screenshots/screenshot_6_zhCN.png" width="960" alt="VideoMergingTool 6.0.0 修复后的工作区：完整日志复制、输出区递归扫描和对齐的进度栏">
 </p>
 
 - 扫描文件夹中的常见视频格式，包括 `mp4`、`mkv`、`mov`、`avi`、`ts`、`m4v`、`flv`、`webm`
@@ -36,7 +36,7 @@ Windows 和 macOS 安装包已经内置 FFmpeg / FFprobe，普通用户不需要
 - 支持横屏和竖屏视频
 - 需要统一画面尺寸时，会补边而不是裁切，尽量保留完整画面
 - 可设置输出目录、临时目录、界面语言、合并模式、GPU 选项、是否保留临时文件
-- 在应用窗口内显示处理日志和进度
+- 在应用窗口内显示处理日志和进度，支持选中文字、复制完整日志，以及打开可全选的完整日志窗口
 - 作为桌面应用运行，不依赖浏览器打开
 
 ## 下载
