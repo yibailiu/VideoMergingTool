@@ -4,7 +4,7 @@ import concurrent.futures
 import logging
 import tempfile
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Callable
 
@@ -64,6 +64,10 @@ def preprocess_group(
     target_video_bitrate: int = 0,
     gpu_workers: int = 1,
 ) -> tuple[list[Path], tempfile.TemporaryDirectory[str] | None]:
+    from .reliability import current_run
+    task_run = current_run.get()
+    if task_run:
+        task_run.sources.update({file.path: file for file in files})
     audio_target = choose_audio_target(list(reference_files or files), codec_plan)
     logger.info(
         "Audio target: codec=%s sample_rate=%d channels=%d bitrate=%s",
@@ -143,60 +147,102 @@ def preprocess_group(
             for file in passthrough_files:
                 progress_callback(file)
 
-    def worker(job: PreprocessJob) -> tuple[int, Path]:
-        return job.output_index, preprocess_file(
-            file=job.file,
-            output_path=job.output_path,
-            canvas=canvas,
-            fps=fps,
-            codec_plan=codec_plan,
-            audio_target=audio_target,
-            tools=tools,
-            logger=logger,
-            pad_color=pad_color,
-            crf=crf,
-            preset=preset,
-            dry_run=dry_run,
-            gpu_plan=gpu_plan,
-            force_video_transcode=job.action == "transcode" and job.segment_action == "copy",
-            force_remux=job.action == "remux" and job.segment_action == "copy",
-            target_video_bitrate=target_video_bitrate,
-            target_video_timescale=target_video_timescale,
-        )
+    def execute_job(job: PreprocessJob) -> tuple[int, Path | None]:
+        def execute(cpu_fallback: bool = False) -> Path:
+            if task_run and task_run.abort_event.is_set():
+                raise CommandError("Task stopped after another processing failure.")
+            effective_plan = codec_plan
+            if cpu_fallback:
+                encoder = {"h264": "libx264", "hevc": "libx265"}.get(codec_plan.video_codec, codec_plan.video_codec)
+                effective_plan = replace(codec_plan, output_video_encoder=encoder)
+            return preprocess_file(
+                file=job.file,
+                output_path=job.output_path,
+                canvas=canvas,
+                fps=fps,
+                codec_plan=effective_plan,
+                audio_target=audio_target,
+                tools=tools,
+                logger=logger,
+                pad_color=pad_color,
+                crf=crf,
+                preset=preset,
+                dry_run=dry_run,
+                gpu_plan=None if cpu_fallback else gpu_plan,
+                force_video_transcode=job.action == "transcode" and job.segment_action == "copy",
+                force_remux=job.action == "remux" and job.segment_action == "copy",
+                target_video_bitrate=target_video_bitrate,
+                target_video_timescale=target_video_timescale,
+            )
+        try:
+            path = execute()
+        except CommandError as exc:
+            from .reliability import is_system_failure
+            if gpu_plan is not None and gpu_plan.enabled and not is_system_failure(str(exc)):
+                logger.warning("GPU processing failed for %s; retrying with CPU.", job.file.path)
+                try:
+                    path = execute(True)
+                except CommandError as cpu_exc:
+                    if task_run and task_run.recover_input(job.file, tools, cpu_exc):
+                        job.output_path.unlink(missing_ok=True)
+                        return job.output_index, None
+                    raise
+            elif task_run and task_run.recover_input(job.file, tools, exc):
+                job.output_path.unlink(missing_ok=True)
+                return job.output_index, None
+            else:
+                raise
+        if task_run:
+            with task_run.lock:
+                task_run.sources[path] = job.file
+        return job.output_index, path
+
+    def worker(job: PreprocessJob) -> tuple[int, Path | None]:
+        token = current_run.set(task_run)
+        try:
+            return execute_job(job)
+        finally:
+            current_run.reset(token)
 
     lightweight_jobs = [job for job in jobs if job.action in {"remux", "audio"}]
     video_jobs = [job for job in jobs if job.action not in {"remux", "audio"}]
-    _execute_preprocess_jobs(
-        lightweight_jobs,
-        min(2, len(lightweight_jobs)) if lightweight_jobs else 1,
-        worker,
-        outputs,
-        progress_callback,
-        logger,
-        "remux/audio",
-    )
-    is_gpu_enabled = gpu_plan is not None and gpu_plan.enabled
-    video_workers = (
-        min(max(1, gpu_workers), 3, len(video_jobs))
-        if is_gpu_enabled and video_jobs
-        else 1
-    )
-    _execute_preprocess_jobs(
-        video_jobs,
-        video_workers,
-        worker,
-        outputs,
-        progress_callback,
-        logger,
-        "GPU video" if is_gpu_enabled else "CPU video",
-    )
-
-    flattened_outputs = [path for path in outputs if path is not None]
-    if len(flattened_outputs) != len(files):
-        raise CommandError(
-            "Preprocess output count mismatch: "
-            f"produced {len(flattened_outputs)} output file(s) for {len(files)} source file(s)."
+    try:
+        _execute_preprocess_jobs(
+            lightweight_jobs,
+            min(2, len(lightweight_jobs)) if lightweight_jobs else 1,
+            worker,
+            outputs,
+            progress_callback,
+            logger,
+            "remux/audio",
         )
+        is_gpu_enabled = gpu_plan is not None and gpu_plan.enabled
+        video_workers = (
+            min(max(1, gpu_workers), 3, len(video_jobs))
+            if is_gpu_enabled and video_jobs
+            else 1
+        )
+        _execute_preprocess_jobs(
+            video_jobs,
+            video_workers,
+            worker,
+            outputs,
+            progress_callback,
+            logger,
+            "GPU video" if is_gpu_enabled else "CPU video",
+        )
+
+        flattened_outputs = [path for path in outputs if path is not None]
+        skipped_count = sum(str(file.path) in task_run.skipped for file in files) if task_run else 0
+        if len(flattened_outputs) != len(files) - skipped_count:
+            raise CommandError(
+                "Preprocess output count mismatch: "
+                f"produced {len(flattened_outputs)} output file(s) for {len(files)} source file(s)."
+            )
+    except BaseException:
+        if temp_owner:
+            temp_owner.cleanup()
+        raise
     logger.info(
         "Preprocess outputs verified: %d source file(s), %d output file(s).",
         len(files),
@@ -205,6 +251,8 @@ def preprocess_group(
     if keep_temp:
         logger.info("Keeping temp files in %s", temp_dir)
         return flattened_outputs, None
+    if task_run and temp_owner:
+        task_run.temp_owners.append(temp_owner)
     return flattened_outputs, temp_owner
 
 
@@ -249,7 +297,7 @@ def _build_preprocess_jobs(
 def _execute_preprocess_jobs(
     jobs: list[PreprocessJob],
     max_workers: int,
-    worker: Callable[[PreprocessJob], tuple[int, Path]],
+    worker: Callable[[PreprocessJob], tuple[int, Path | None]],
     outputs: list[Path | None],
     progress_callback: Callable[[VideoFile], None] | None,
     logger: logging.Logger,
@@ -273,13 +321,30 @@ def _execute_preprocess_jobs(
         return
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=worker_count) as executor:
-        futures = {executor.submit(worker, job): job for job in jobs}
-        for future in concurrent.futures.as_completed(futures):
-            job = futures[future]
-            output_index, path = future.result()
-            outputs[output_index] = path
-            if progress_callback:
-                progress_callback(job.file)
+        remaining = iter(jobs)
+        futures = {executor.submit(worker, job): job for job in [next(remaining) for _ in range(worker_count)]}
+        try:
+            while futures:
+                completed, _ = concurrent.futures.wait(futures, return_when=concurrent.futures.FIRST_COMPLETED)
+                # Resolve the whole batch before submitting anything else: one fatal error stops scheduling.
+                for future in completed:
+                    job = futures.pop(future)
+                    output_index, path = future.result()
+                    outputs[output_index] = path
+                    if progress_callback:
+                        progress_callback(job.file)
+                for _ in completed:
+                    job = next(remaining, None)
+                    if job is not None:
+                        futures[executor.submit(worker, job)] = job
+        except BaseException:
+            from .reliability import current_run
+            run = current_run.get()
+            if run:
+                run.abort()
+            for future in futures:
+                future.cancel()
+            raise
 
 
 def preprocess_file(
@@ -341,6 +406,7 @@ def preprocess_file(
         tools.ffmpeg,
         "-y",
         *FFMPEG_RUNTIME_ARGS,
+        "-xerror",
         "-noautorotate",
         "-display_rotation:v:0",
         "0",

@@ -1,4 +1,7 @@
 .venv/
+.venv-build/
+frontend/node_modules/
+videomerge/web/
 .tools/
 .learnings/
 __pycache__/

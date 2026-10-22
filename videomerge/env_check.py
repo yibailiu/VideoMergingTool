@@ -18,14 +18,6 @@ from .models import ToolPaths
 
 
 DOWNLOADS = {
-    "Darwin": {
-        "url": "https://evermeet.cx/ffmpeg/getrelease/zip",
-        "checksum_env": "VIDEOMERGE_FFMPEG_DARWIN_SHA256",
-        "ffmpeg_member": "ffmpeg",
-        "ffprobe_url": "https://evermeet.cx/ffmpeg/getrelease/ffprobe/zip",
-        "ffprobe_checksum_env": "VIDEOMERGE_FFPROBE_DARWIN_SHA256",
-        "ffprobe_member": "ffprobe",
-    },
     "Windows": {
         "url": "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip",
         "checksum_env": "VIDEOMERGE_FFMPEG_WINDOWS_SHA256",
@@ -39,6 +31,31 @@ DOWNLOADS = {
         "ffprobe_member": "ffprobe",
     },
 }
+
+# Native builds from the same pinned release; upstream checksums are mandatory.
+MACOS_DOWNLOADS = {
+    "x86_64": {
+        "base_url": "https://ffmpeg.martin-riedl.de/download/macos/amd64/1789931006_9.0.2",
+        "sha256": "7c6b4125b191cbf773832dc51f424cf2b6bb7da43007d1e066f95909e47cacd4",
+        "ffprobe_sha256": "2322438ed2f6319a691291b247d09c69dcaa3a982460d1f269a7e1af335cfdfd",
+    },
+    "arm64": {
+        "base_url": "https://ffmpeg.martin-riedl.de/download/macos/arm64/1789931890_9.0.2",
+        "sha256": "c8ed4c4e6978a03c485edbfe4e0a5dc2380f8a30bba5150531b31b094492d924",
+        "ffprobe_sha256": "fcbe839537485eaee7a7a8bc5cbc0f90d53617e80943e8a5b2e31cb851197ea6",
+    },
+}
+
+
+def macos_download_config(architecture: str | None = None) -> dict[str, str]:
+    architecture = architecture or platform.machine()
+    architecture = {"amd64": "x86_64", "aarch64": "arm64"}.get(architecture.lower(), architecture.lower())
+    if architecture not in MACOS_DOWNLOADS:
+        raise DependencyError(f"Unsupported macOS architecture: {architecture}")
+    config = MACOS_DOWNLOADS[architecture]
+    return {**config, "url": config["base_url"] + "/ffmpeg.zip",
+            "ffprobe_url": config["base_url"] + "/ffprobe.zip",
+            "ffmpeg_member": "ffmpeg", "ffprobe_member": "ffprobe"}
 
 
 def default_tools_dir() -> Path:
@@ -88,26 +105,30 @@ def resolve_tools(
     return downloaded
 
 
-def download_ffmpeg_tools(tools_dir: Path, logger: logging.Logger) -> ToolPaths:
+def download_ffmpeg_tools(tools_dir: Path, logger: logging.Logger, architecture: str | None = None) -> ToolPaths:
     system = platform.system()
-    config = DOWNLOADS.get(system)
+    config = macos_download_config(architecture) if system == "Darwin" else DOWNLOADS.get(system)
     if not config:
         raise DependencyError(f"Automatic FFmpeg download is not supported on {system}.")
 
     tools_dir.mkdir(parents=True, exist_ok=True)
     archive_path = tools_dir / f"ffmpeg_download{_archive_suffix(config['url'])}"
-    _download(config["url"], archive_path, logger, config.get("checksum_env"))
+    _download(config["url"], archive_path, logger, config.get("checksum_env"), config.get("sha256"))
     ffmpeg = _extract_member(archive_path, config["ffmpeg_member"], tools_dir, logger)
 
     if system == "Darwin" and "ffprobe_url" in config:
         ffprobe_archive = tools_dir / f"ffprobe_download{_archive_suffix(config['ffprobe_url'])}"
-        _download(config["ffprobe_url"], ffprobe_archive, logger, config.get("ffprobe_checksum_env"))
+        _download(config["ffprobe_url"], ffprobe_archive, logger, config.get("ffprobe_checksum_env"), config.get("ffprobe_sha256"))
         ffprobe = _extract_member(ffprobe_archive, config["ffprobe_member"], tools_dir, logger)
     else:
         ffprobe = _extract_member(archive_path, config["ffprobe_member"], tools_dir, logger)
 
     _make_executable(ffmpeg)
     _make_executable(ffprobe)
+    if system == "Darwin":
+        from .architecture import require_macos_architectures
+        require_macos_architectures(ffmpeg, {architecture or platform.machine()})
+        require_macos_architectures(ffprobe, {architecture or platform.machine()})
     logger.info("Downloaded ffmpeg: %s", ffmpeg)
     logger.info("Downloaded ffprobe: %s", ffprobe)
     return ToolPaths(ffmpeg=ffmpeg, ffprobe=ffprobe)
@@ -172,22 +193,26 @@ def _system_binary_candidates(name: str) -> list[Path]:
     ]
 
 
-def _download(url: str, output: Path, logger: logging.Logger, checksum_env: str | None = None) -> None:
+def _download(url: str, output: Path, logger: logging.Logger, checksum_env: str | None = None, expected_sha256: str | None = None) -> None:
     logger.info("Downloading %s", url)
     try:
-        with urllib.request.urlopen(url, context=_ssl_context(), timeout=60) as response, output.open("wb") as file:
+        request = urllib.request.Request(url, headers={"User-Agent": "VideoMergingTool/6.0 dependency-installer"})
+        with urllib.request.urlopen(request, context=_ssl_context(), timeout=60) as response, output.open("wb") as file:
             shutil.copyfileobj(response, file)
     except Exception as exc:  # pragma: no cover - depends on network.
         raise DependencyError(f"Failed to download {url}: {exc}") from exc
-    _verify_download_checksum(output, checksum_env, logger)
+    _verify_download_checksum(output, checksum_env, logger, expected_sha256)
 
 
-def _verify_download_checksum(path: Path, checksum_env: str | None, logger: logging.Logger) -> None:
+def _verify_download_checksum(path: Path, checksum_env: str | None, logger: logging.Logger, expected_sha256: str | None = None) -> None:
     digest = _sha256(path)
     logger.info("Downloaded %s SHA256: %s", path.name, digest)
-    if not checksum_env:
+    if expected_sha256:
+        expected = expected_sha256.strip().lower()
+    elif checksum_env:
+        expected = os.environ.get(checksum_env, "").strip().lower()
+    else:
         return
-    expected = os.environ.get(checksum_env, "").strip().lower()
     if not expected:
         logger.info("Set %s to enforce this download checksum.", checksum_env)
         return
@@ -195,7 +220,7 @@ def _verify_download_checksum(path: Path, checksum_env: str | None, logger: logg
         path.unlink(missing_ok=True)
         raise DependencyError(
             f"Checksum mismatch for {path.name}: expected {expected}, got {digest}. "
-            f"Update {checksum_env} only after verifying the upstream archive."
+            "Update the pinned checksum only after verifying the upstream archive."
         )
 
 

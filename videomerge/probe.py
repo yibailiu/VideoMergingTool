@@ -34,15 +34,19 @@ def probe_file(path: Path, tools: ToolPaths, logger: logging.Logger) -> VideoFil
         FFPROBE_ENTRIES,
         str(path),
     ]
-    process = subprocess.run(
-        args,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        **subprocess_window_kwargs(),
-    )
+    try:
+        process = subprocess.run(
+            args,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=30,
+            **subprocess_window_kwargs(),
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise ProbeError(f"Metadata check timed out: {path}") from exc
     if process.returncode != 0:
         raise ProbeError(process.stderr.strip() or f"ffprobe failed for {path}")
     if not process.stdout:
@@ -112,7 +116,7 @@ def probe_files(paths: list[Path], tools: ToolPaths, logger: logging.Logger) -> 
     def worker(index: int, path: Path) -> tuple[int, VideoFile | None, str | None]:
         try:
             return index, probe_file(path, tools, logger), None
-        except ProbeError as exc:
+        except (ProbeError, ValueError) as exc:
             return index, None, str(exc)
 
     max_workers = min(4, len(paths))

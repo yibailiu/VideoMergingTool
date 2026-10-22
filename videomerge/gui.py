@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import locale
 import logging
+import mimetypes
 import os
 import platform
 import re
@@ -63,6 +64,8 @@ CONFIG_FIELD_IDS = [
     "notifyOnComplete",
     "playSoundOnComplete",
     "columnWidths",
+    "checkLevel",
+    "onError",
 ]
 
 PICKER_TEXT = {
@@ -89,1750 +92,6 @@ PICKER_TEXT = {
 }
 
 
-HTML = r"""<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>VideoMergingTool</title>
-  <style>
-    :root {
-      --bg-body: #161715;
-      --bg-panel: #1D1E1C;
-      --bg-panel-hover: #252724;
-      --bg-input: #121311;
-      --border-subtle: #2C2D2A;
-      --border-focus: #4A4D46;
-      --text-primary: #FFFFFF;
-      --text-secondary: #9B9C98;
-      --text-muted: #666763;
-      --accent-red: #E94E3D;
-      --accent-green: #5E9C60;
-      --accent-yellow: #D4A35B;
-      --accent-blue: #3498DB;
-      --radius-panel: 8px;
-      --radius-input: 6px;
-      --radius-pill: 9999px;
-      --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-      --font-mono: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, Courier, monospace;
-    }
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-    * {
-      user-select: text;
-      -webkit-user-select: text;
-    }
-    body {
-      background: var(--bg-body);
-      color: var(--text-primary);
-      font-family: var(--font-sans);
-      font-size: 14px;
-      min-height: 100vh;
-      min-width: 900px;
-      overflow: hidden;
-      -webkit-font-smoothing: antialiased;
-    }
-    button, select, input[type="checkbox"], .mode-card, .info, .version-chip {
-      user-select: none;
-      -webkit-user-select: none;
-    }
-    ::-webkit-scrollbar { width: 8px; height: 8px; }
-    ::-webkit-scrollbar-track { background: transparent; }
-    ::-webkit-scrollbar-thumb { background: var(--border-subtle); border-radius: var(--radius-pill); }
-    header {
-      height: 56px;
-      border-bottom: 1px solid var(--border-subtle);
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      padding: 0 24px;
-      background: var(--bg-body);
-    }
-    .brand { display: flex; align-items: center; gap: 10px; min-width: 0; }
-    .logo { font-size: 18px; font-weight: 800; letter-spacing: -.03em; display: flex; align-items: center; gap: 8px; }
-    .logo-dot { width: 6px; height: 6px; background: var(--accent-red); border-radius: 50%; }
-    .version-chip {
-      color: var(--text-secondary);
-      border: 1px solid var(--border-subtle);
-      border-radius: var(--radius-pill);
-      padding: 3px 8px;
-      font-size: 11px;
-      font-weight: 800;
-      line-height: 1;
-    }
-    .github-button {
-      width: 30px;
-      height: 30px;
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      padding: 0;
-      color: var(--text-secondary);
-    }
-    .github-button svg { width: 16px; height: 16px; fill: currentColor; }
-    .dep-badge {
-      color: var(--accent-green);
-      background: var(--bg-panel);
-      border: 1px solid var(--border-subtle);
-      border-radius: var(--radius-pill);
-      padding: 4px 12px;
-      font-size: 12px;
-      min-height: 28px;
-    }
-    button.dep-badge:hover { background: var(--bg-panel-hover); border-color: var(--border-focus); }
-    .main {
-      display: grid;
-      grid-template-columns: minmax(520px, 1fr) minmax(340px, clamp(360px, 32vw, 480px));
-      height: calc(100vh - 56px);
-      min-height: 560px;
-    }
-    .left {
-      border-right: 1px solid var(--border-subtle);
-      display: grid;
-      grid-template-rows: auto minmax(180px, 1fr) minmax(160px, 32vh) minmax(88px, auto);
-      min-width: 0;
-      overflow: hidden;
-    }
-    .right {
-      background: var(--bg-panel);
-      display: grid;
-      grid-template-rows: auto minmax(0, 1fr) auto;
-      overflow: hidden;
-    }
-    .pane-header {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      padding: 16px 24px 12px;
-      border-bottom: 1px solid var(--border-subtle);
-    }
-    h2 { font-size: 16px; font-weight: 700; }
-    h3, .label-micro {
-      font-size: 11px;
-      color: var(--text-muted);
-      text-transform: uppercase;
-      letter-spacing: .08em;
-      font-weight: 800;
-    }
-    .summary { margin-top: 8px; }
-    .toolbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-    button {
-      font: inherit;
-      cursor: pointer;
-      border: 1px solid var(--border-subtle);
-      background: var(--bg-body);
-      color: var(--text-primary);
-      border-radius: var(--radius-pill);
-      padding: 9px 16px;
-      transition: background .16s, border-color .16s, transform .16s;
-    }
-    button:hover { background: var(--bg-panel-hover); border-color: var(--border-focus); }
-    button:active { transform: scale(.98); }
-    button:disabled {
-      cursor: not-allowed;
-      opacity: .45;
-      transform: none;
-    }
-    button:disabled:hover { background: var(--bg-body); border-color: var(--border-subtle); }
-    .btn-primary:disabled:hover { background: var(--text-primary); border-color: transparent; }
-    .btn-icon { border-radius: var(--radius-input); padding: 8px 10px; color: var(--text-secondary); }
-    .btn-primary {
-      width: 100%;
-      background: var(--text-primary);
-      color: var(--bg-body);
-      border: none;
-      border-radius: var(--radius-pill);
-      font-weight: 800;
-      padding: 14px 24px;
-    }
-    .btn-primary.stop {
-      background: var(--accent-red);
-      color: var(--text-primary);
-    }
-    .table-wrap {
-      margin: clamp(12px, 2vw, 24px);
-      margin-top: 8px;
-      margin-bottom: 12px;
-      border: 1px solid var(--border-subtle);
-      border-radius: var(--radius-panel);
-      overflow: auto;
-      background: var(--bg-panel);
-      min-height: 0;
-    }
-    .source-table-section {
-      min-height: 0;
-      display: grid;
-      grid-template-rows: auto minmax(0, 1fr);
-      overflow: hidden;
-    }
-    .table-toolbar {
-      margin: 10px clamp(12px, 2vw, 24px) 0;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 10px;
-      min-height: 28px;
-    }
-    .selection-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-    .selection-actions button {
-      padding: 5px 10px;
-      font-size: 12px;
-      color: var(--text-secondary);
-    }
-    .selection-count {
-      color: var(--text-muted);
-      white-space: nowrap;
-    }
-    .column-resize-hint {
-      display: inline-flex;
-      align-items: center;
-      gap: 5px;
-      margin-top: 4px;
-      color: var(--accent-blue);
-      font-size: 11px;
-      white-space: nowrap;
-    }
-    .column-resize-hint-icon {
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      width: 18px;
-      height: 18px;
-      border: 1px solid rgba(52,152,219,.45);
-      border-radius: 5px;
-      background: rgba(52,152,219,.10);
-      font: 700 13px/1 var(--font-mono);
-    }
-    table { width: 100%; min-width: 800px; border-collapse: collapse; table-layout: fixed; }
-    th {
-      position: sticky;
-      top: 0;
-      z-index: 1;
-      background: var(--bg-panel);
-      color: var(--text-muted);
-      text-align: left;
-      padding: 11px 10px;
-      border-bottom: 1px solid var(--border-subtle);
-      font-size: 11px;
-      text-transform: uppercase;
-      letter-spacing: .08em;
-      white-space: nowrap;
-      overflow: visible;
-    }
-    th > span:not(.column-resize-handle) {
-      display: block;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }
-    .column-resize-handle {
-      position: absolute;
-      top: 0;
-      right: -7px;
-      bottom: 0;
-      z-index: 3;
-      width: 14px;
-      cursor: col-resize;
-      touch-action: none;
-      outline: none;
-    }
-    .column-resize-handle::before {
-      content: "";
-      position: absolute;
-      top: 5px;
-      bottom: 5px;
-      left: 6px;
-      width: 1px;
-      border-radius: 1px;
-      background: var(--border-focus);
-    }
-    .column-resize-handle::after {
-      content: "⋮";
-      position: absolute;
-      top: 50%;
-      left: 1px;
-      width: 12px;
-      padding-bottom: 1px;
-      transform: translateY(-50%);
-      border: 1px solid var(--border-focus);
-      border-radius: 4px;
-      background: var(--bg-panel);
-      color: var(--text-muted);
-      font: 700 12px/14px var(--font-mono);
-      text-align: center;
-    }
-    .column-resize-handle:hover::before,
-    .column-resize-handle:focus-visible::before,
-    .column-resize-handle.active::before { width: 2px; background: var(--accent-blue); }
-    .column-resize-handle:hover::after,
-    .column-resize-handle:focus-visible::after,
-    .column-resize-handle.active::after {
-      border-color: var(--accent-blue);
-      color: var(--accent-blue);
-      box-shadow: 0 0 0 2px rgba(52,152,219,.12);
-    }
-    body.column-resizing, body.column-resizing * {
-      cursor: col-resize !important;
-      user-select: none !important;
-      -webkit-user-select: none !important;
-    }
-    td {
-      padding: 10px;
-      border-bottom: 1px solid var(--border-subtle);
-      color: var(--text-secondary);
-      font-size: 13px;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-    }
-    .file-row td:not(:nth-child(2)) {
-      overflow: visible;
-      text-overflow: clip;
-    }
-    .mono { font-family: var(--font-mono); }
-    .group-row td {
-      padding: 9px 12px;
-      background: var(--bg-body);
-      color: var(--text-primary);
-      font-size: 11px;
-      font-weight: 800;
-      text-transform: uppercase;
-      letter-spacing: .06em;
-    }
-    .group-label {
-      display: inline-flex;
-      align-items: center;
-      gap: 7px;
-    }
-    .group-marker {
-      width: 7px;
-      height: 7px;
-      border-radius: 50%;
-      background: var(--text-muted);
-    }
-    .group-row.landscape .group-marker { background: var(--accent-blue); }
-    .group-row.portrait .group-marker { background: var(--accent-red); }
-    .group-count {
-      color: var(--text-muted);
-      font-weight: 700;
-    }
-    .status-ok { color: var(--accent-green); }
-    .status-warn { color: var(--accent-yellow); }
-    .status-blocked { color: var(--accent-red); }
-    .file-row.excluded td:not(.actions-cell) {
-      opacity: .48;
-    }
-    .file-row.excluded .file-link {
-      text-decoration: line-through;
-    }
-    .file-link {
-      display: block;
-      flex: 1 1 auto;
-      min-width: 0;
-      max-width: 100%;
-      padding: 0;
-      border: 0;
-      border-radius: 0;
-      background: transparent;
-      color: var(--accent-blue);
-      text-align: left;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-      vertical-align: middle;
-    }
-    .file-name-content {
-      display: flex;
-      align-items: center;
-      min-width: 0;
-    }
-    .file-link:hover {
-      color: #69b7eb;
-      background: transparent;
-      border-color: transparent;
-      text-decoration: underline;
-    }
-    .rotation-badge {
-      display: inline-block;
-      flex: 0 0 auto;
-      margin-left: 4px;
-      padding: 2px 4px;
-      border-radius: 4px;
-      background: rgba(212,163,91,.18);
-      color: var(--accent-yellow);
-      font: 10px/1.2 var(--font-mono);
-      vertical-align: middle;
-    }
-    .actions-cell {
-      padding-left: 8px;
-      padding-right: 8px;
-      overflow: visible;
-    }
-    .file-actions {
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      gap: 5px;
-    }
-    .file-action {
-      width: 28px;
-      height: 28px;
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      padding: 0;
-      border-radius: var(--radius-input);
-      color: var(--text-secondary);
-      font-size: 16px;
-      line-height: 1;
-    }
-    .file-action.remove { color: var(--accent-red); }
-    .file-action.restore { color: var(--accent-green); }
-    .file-action.rotate.active {
-      color: var(--accent-yellow);
-      background: rgba(212,163,91,.14);
-      border-color: rgba(212,163,91,.45);
-    }
-    .select-cell, .select-head {
-      text-align: center;
-      padding-left: 10px;
-      padding-right: 10px;
-    }
-    .file-checkbox {
-      width: 18px;
-      height: 18px;
-      flex-basis: 18px;
-      margin: 0 auto;
-      vertical-align: middle;
-    }
-    .file-checkbox::after {
-      width: 10px;
-      height: 10px;
-      top: 3px;
-      left: 3px;
-    }
-    .file-checkbox:checked::after { left: 3px; }
-    .console {
-      margin: 0 clamp(12px, 2vw, 24px) 12px;
-      background: #0A0A0A;
-      border: 1px solid #1A1A1A;
-      border-radius: var(--radius-panel);
-      padding: 14px;
-      min-height: 0;
-      display: grid;
-      grid-template-rows: 18px minmax(0, 1fr) 4px;
-      gap: 8px;
-      height: 100%;
-      min-height: 150px;
-      max-height: none;
-      overflow: hidden;
-    }
-    .console-head { display: flex; justify-content: space-between; }
-    .logs {
-      overflow: auto;
-      font-family: var(--font-mono);
-      color: var(--text-muted);
-      font-size: 12px;
-      line-height: 1.5;
-      white-space: pre-wrap;
-    }
-    .bar { height: 4px; background: #222; border-radius: 2px; overflow: hidden; }
-    .bar-fill { height: 100%; width: 0%; background: var(--accent-red); transition: width .2s; }
-    .plan {
-      margin: 0 clamp(12px, 2vw, 24px) 18px;
-      border: 1px solid var(--border-subtle);
-      border-radius: var(--radius-panel);
-      background: var(--bg-panel);
-      padding: 14px 16px;
-      overflow: hidden;
-    }
-    .plan-title { color: var(--accent-red); margin-bottom: 8px; }
-    .plan-text { color: var(--text-secondary); font-size: 13px; }
-    .config-title { padding: 18px 24px; border-bottom: 1px solid var(--border-subtle); }
-    .config-scroll { overflow: auto; padding: 24px; min-height: 0; }
-    .mode-list { display: grid; gap: 10px; margin-top: 12px; }
-    .mode-card {
-      background: var(--bg-body);
-      border: 1px solid var(--border-subtle);
-      border-radius: var(--radius-panel);
-      padding: 14px 16px;
-      cursor: pointer;
-    }
-    .mode-card.active { border-color: var(--accent-red); background: rgba(233,78,61,.04); }
-    .mode-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 5px; }
-    .mode-title { font-weight: 800; }
-    .badge {
-      font-size: 10px;
-      color: var(--text-secondary);
-      background: var(--bg-panel-hover);
-      border-radius: 4px;
-      padding: 2px 7px;
-      text-transform: uppercase;
-      letter-spacing: .06em;
-    }
-    .mode-card.active .badge.opt { color: var(--accent-blue); background: rgba(52,152,219,.18); }
-    .mode-card.active .badge.fast { color: var(--accent-green); background: rgba(94,156,96,.18); }
-    .mode-card.active .badge.extreme { color: var(--accent-red); background: rgba(233,78,61,.18); }
-    .mode-desc { color: var(--text-secondary); font-size: 12px; line-height: 1.4; }
-    .section { margin-top: 26px; }
-    label { display: block; margin: 12px 0 6px; }
-    input:not([type="checkbox"]), select {
-      width: 100%;
-      background: var(--bg-input);
-      color: var(--text-primary);
-      border: 1px solid var(--border-subtle);
-      border-radius: var(--radius-input);
-      padding: 10px 12px;
-      font: inherit;
-    }
-    input[type="checkbox"] {
-      appearance: none;
-      -webkit-appearance: none;
-      width: 36px;
-      height: 20px;
-      flex: 0 0 36px;
-      border: 1px solid var(--border-focus);
-      border-radius: var(--radius-pill);
-      background: var(--bg-input);
-      position: relative;
-      cursor: pointer;
-      padding: 0;
-      margin-top: 2px;
-    }
-    input[type="checkbox"]::after {
-      content: "";
-      position: absolute;
-      width: 14px;
-      height: 14px;
-      top: 2px;
-      left: 2px;
-      border-radius: 50%;
-      background: var(--text-secondary);
-      transition: left .16s, background .16s;
-    }
-    input[type="checkbox"]:checked { background: rgba(94,156,96,.22); border-color: var(--accent-green); }
-    input[type="checkbox"]:checked::after { left: 18px; background: var(--accent-green); }
-    input.file-checkbox {
-      width: 18px;
-      height: 18px;
-      flex: 0 0 18px;
-      margin: 0 auto;
-      display: block;
-    }
-    input.file-checkbox::after {
-      width: 10px;
-      height: 10px;
-      top: 3px;
-      left: 3px;
-    }
-    input.file-checkbox:checked::after { left: 3px; }
-    .folder-row { display: grid; grid-template-columns: 1fr auto; gap: 8px; }
-    .hint { color: var(--text-muted); font-size: 12px; margin-top: 6px; line-height: 1.4; }
-    .num-row { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
-    .num-row input { width: 80px; text-align: right; }
-    .field-label {
-      display: flex;
-      align-items: center;
-      gap: 6px;
-      margin: 12px 0 6px;
-    }
-    .info {
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      width: 15px;
-      height: 15px;
-      flex: 0 0 15px;
-      border: 1px solid var(--border-focus);
-      border-radius: 50%;
-      color: var(--text-muted);
-      font-size: 10px;
-      line-height: 1;
-      cursor: help;
-      text-transform: none;
-      letter-spacing: 0;
-    }
-    .tooltip {
-      position: fixed;
-      display: none;
-      max-width: 300px;
-      z-index: 10;
-      background: #0A0A0A;
-      color: var(--text-secondary);
-      border: 1px solid var(--border-subtle);
-      border-radius: var(--radius-input);
-      padding: 8px 10px;
-      font: 12px/1.4 var(--font-sans);
-      box-shadow: 0 8px 24px rgba(0,0,0,.35);
-      pointer-events: none;
-    }
-    .toggle {
-      display: flex;
-      justify-content: space-between;
-      gap: 16px;
-      padding: 12px 0;
-      border-bottom: 1px solid var(--border-subtle);
-    }
-    .toggle span { color: var(--text-primary); }
-    .toggle-title { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
-    .toggle-text { min-width: 0; }
-    .toggle small { display: block; color: var(--text-muted); margin-top: 3px; }
-    .dock { padding: 18px 24px; border-top: 1px solid var(--border-subtle); }
-    .header-actions { display: flex; align-items: center; gap: 10px; }
-    .language-select {
-      width: auto;
-      min-width: 118px;
-      padding: 6px 28px 6px 10px;
-      font-size: 12px;
-      font-weight: 700;
-    }
-    .toast {
-      position: fixed;
-      right: 20px;
-      bottom: 20px;
-      z-index: 20;
-      max-width: min(360px, calc(100vw - 40px));
-      background: #0A0A0A;
-      color: var(--text-primary);
-      border: 1px solid var(--border-subtle);
-      border-left: 3px solid var(--accent-green);
-      border-radius: var(--radius-panel);
-      padding: 12px 14px;
-      box-shadow: 0 12px 32px rgba(0,0,0,.4);
-      display: none;
-      line-height: 1.45;
-    }
-    .toast.error { border-left-color: var(--accent-red); }
-    .toast-title { font-weight: 800; margin-bottom: 4px; }
-    .toast-body { color: var(--text-secondary); font-size: 13px; }
-    @media (max-width: 1040px) {
-      body { min-width: 720px; overflow: auto; }
-      .main { grid-template-columns: 1fr; height: auto; min-height: calc(100vh - 56px); }
-      .left { border-right: 0; border-bottom: 1px solid var(--border-subtle); min-height: 620px; }
-      .right { min-height: 560px; }
-    }
-  </style>
-</head>
-<body>
-  <header>
-    <div class="brand">
-      <div class="logo">VIDEO MERGE <span class="logo-dot"></span></div>
-      <span class="version-chip">v__APP_VERSION__</span>
-      <button class="btn-icon github-button" id="githubLink" type="button" title="GitHub Repository" aria-label="GitHub Repository">
-        <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.67 0 8.2c0 3.62 2.29 6.69 5.47 7.78.4.08.55-.18.55-.4 0-.2-.01-.84-.01-1.52-2.01.38-2.53-.5-2.69-.97-.09-.24-.48-.97-.82-1.17-.28-.15-.68-.52-.01-.53.63-.01 1.08.59 1.23.83.72 1.24 1.87.89 2.33.68.07-.53.28-.89.51-1.09-1.78-.21-3.64-.91-3.64-4.03 0-.89.31-1.62.82-2.19-.08-.21-.36-1.04.08-2.16 0 0 .67-.22 2.2.84A7.4 7.4 0 0 1 8 4c.68 0 1.36.09 1.99.27 1.53-1.06 2.2-.84 2.2-.84.44 1.12.16 1.95.08 2.16.51.57.82 1.3.82 2.19 0 3.13-1.87 3.82-3.65 4.03.29.26.54.75.54 1.52 0 1.09-.01 1.98-.01 2.25 0 .22.15.48.55.4A8.12 8.12 0 0 0 16 8.2C16 3.67 12.42 0 8 0Z"/></svg>
-      </button>
-    </div>
-    <div class="header-actions">
-      <select class="language-select" id="languageSelect" title="Switch language">
-        <option value="en">English</option>
-        <option value="zh">简体中文</option>
-      </select>
-      <button class="dep-badge" id="ffmpegStatus" type="button"></button>
-    </div>
-  </header>
-  <main class="main">
-    <section class="left">
-      <div class="pane-header">
-        <div>
-          <h2 data-i18n="sourceFiles">Source Files</h2>
-          <div class="label-micro summary" id="summary" data-i18n="noFolderSelected">No folder selected</div>
-        </div>
-        <div class="toolbar">
-          <button id="selectSource" data-i18n="selectFolder">Select Folder</button>
-          <button id="selectFiles" data-i18n="selectFiles">Select Files</button>
-          <button class="btn-icon" id="refresh" title="Refresh">↻</button>
-        </div>
-      </div>
-      <div class="source-table-section">
-        <div class="table-toolbar">
-          <div class="selection-actions">
-            <button id="selectAllFiles" type="button" data-i18n="selectAllFiles">Select All</button>
-            <button id="clearFileSelection" type="button" data-i18n="clearFileSelection">Clear Selection</button>
-          </div>
-          <div>
-            <div class="label-micro selection-count" id="selectionCount"></div>
-            <div class="hint" data-i18n="visualGroupingHint">Orientation groups are visual only; merge order still follows the selected global sort.</div>
-            <div class="column-resize-hint"><span class="column-resize-hint-icon" aria-hidden="true">↔</span><span data-i18n="columnResizeHint">Drag a header grip to resize; double-click to restore automatic width.</span></div>
-          </div>
-        </div>
-        <div class="table-wrap" id="tableWrap">
-          <table id="videoTable">
-            <colgroup id="videoColumns">
-              <col style="width: 46px">
-              <col style="width: 180px">
-              <col style="width: 95px">
-              <col style="width: 100px">
-              <col style="width: 65px">
-              <col style="width: 75px">
-              <col style="width: 140px">
-              <col style="width: 75px">
-              <col style="width: 90px">
-              <col style="width: 76px">
-            </colgroup>
-            <thead>
-              <tr>
-                <th class="select-head"><span class="column-resize-handle" role="separator" tabindex="0" data-column="0"></span></th>
-                <th><span data-i18n="filename">Filename</span><span class="column-resize-handle" role="separator" tabindex="0" data-column="1"></span></th>
-                <th><span data-i18n="resolution">Resolution</span><span class="column-resize-handle" role="separator" tabindex="0" data-column="2"></span></th>
-                <th><span data-i18n="codec">Codec</span><span class="column-resize-handle" role="separator" tabindex="0" data-column="3"></span></th>
-                <th><span>FPS</span><span class="column-resize-handle" role="separator" tabindex="0" data-column="4"></span></th>
-                <th><span data-i18n="duration">Dur</span><span class="column-resize-handle" role="separator" tabindex="0" data-column="5"></span></th>
-                <th><span data-i18n="mediaCreatedTime">Media Created</span><span class="column-resize-handle" role="separator" tabindex="0" data-column="6"></span></th>
-                <th><span data-i18n="fileSize">Size</span><span class="column-resize-handle" role="separator" tabindex="0" data-column="7"></span></th>
-                <th><span data-i18n="status">Status</span><span class="column-resize-handle" role="separator" tabindex="0" data-column="8"></span></th>
-                <th><span data-i18n="actions">Actions</span><span class="column-resize-handle" role="separator" tabindex="0" data-column="9"></span></th>
-              </tr>
-            </thead>
-            <tbody id="fileRows"></tbody>
-          </table>
-        </div>
-      </div>
-      <div class="console">
-        <div class="console-head"><span class="label-micro" data-i18n="processConsole">Process Console</span><span class="label-micro" id="progressText">0%</span></div>
-        <div class="logs" id="logs"></div>
-        <div class="bar"><div class="bar-fill" id="bar"></div></div>
-      </div>
-      <div class="plan">
-        <div class="label-micro plan-title" id="planTitle"></div>
-        <div class="plan-text" id="planText"></div>
-      </div>
-    </section>
-    <aside class="right">
-      <h2 class="config-title" data-i18n="configuration">Configuration</h2>
-      <div class="config-scroll">
-        <h3 data-i18n="mergeStrategy">Merge Strategy</h3>
-        <div class="mode-list">
-          <div class="mode-card" data-mode="fast"><div class="mode-head"><span class="mode-title" data-i18n="fastMerge">Fast Merge</span><span class="badge fast" data-i18n="lossless">Lossless</span></div><div class="mode-desc" data-i18n="fastDesc">Stream copy only. Skips incompatible groups.</div></div>
-          <div class="mode-card active" data-mode="optimal"><div class="mode-head"><span class="mode-title" data-i18n="optimalMerge">Optimal Merge</span><span class="badge opt" data-i18n="smart">Smart</span></div><div class="mode-desc" data-i18n="optimalDesc">Groups by orientation and transcodes when needed.</div></div>
-          <div class="mode-card" data-mode="extreme"><div class="mode-head"><span class="mode-title" data-i18n="extremeMerge">Extreme Merge</span><span class="badge extreme" data-i18n="bruteForce">Brute Force</span></div><div class="mode-desc" data-i18n="extremeDesc">Normalizes all files into one output.</div></div>
-        </div>
-        <div class="section">
-          <h3 data-i18n="outputSettings">Output Settings</h3>
-          <div class="field-label label-micro"><span data-i18n="outputFilenamePrefix">Output Filename Prefix</span> <span class="info" data-tip-i18n="tipName">i</span></div>
-          <input id="name" value="Merged_Output">
-          <div class="field-label label-micro"><span data-i18n="outputFolder">Output Folder</span> <span class="info" data-tip-i18n="tipOutputDir">i</span></div>
-          <div class="folder-row"><input id="outputDir" placeholder=""><button id="selectOutput" data-i18n="browse">Browse</button></div>
-          <div class="hint" data-i18n="outputDirHint">Leave empty to use the default merged folder under the source directory.</div>
-          <div class="field-label label-micro"><span data-i18n="tempFolder">Temp Folder</span> <span class="info" data-tip-i18n="tipTempDir">i</span></div>
-          <div class="folder-row"><input id="tempDir" placeholder=""><button id="selectTemp" data-i18n="browse">Browse</button></div>
-          <div class="hint" data-i18n="tempDirHint">Leave empty to use the system default temp directory.</div>
-          <div class="field-label label-micro"><span data-i18n="outputFormat">Output Format</span> <span class="info" data-tip-i18n="tipOutputFormat">i</span></div>
-          <select id="format"><option>mp4</option><option>mkv</option><option>mov</option><option>avi</option><option>ts</option><option>webm</option></select>
-          <div class="field-label label-micro"><span data-i18n="mergeSortOrder">Merge Sort Order</span> <span class="info" data-tip-i18n="tipSortOrder">i</span></div>
-          <select id="sortBy">
-            <option value="name-natural-asc" data-i18n="sortNameNaturalAsc">Filename natural (A-Z)</option>
-            <option value="name-natural-desc" data-i18n="sortNameNaturalDesc">Filename natural (Z-A)</option>
-            <option value="name-asc" data-i18n="sortNameAsc">Filename text (A-Z)</option>
-            <option value="name-desc" data-i18n="sortNameDesc">Filename text (Z-A)</option>
-            <option value="media-created-asc" data-i18n="sortMediaCreatedAsc">Media created (oldest first)</option>
-            <option value="media-created-desc" data-i18n="sortMediaCreatedDesc">Media created (newest first)</option>
-            <option value="size-asc" data-i18n="sortSizeAsc">File size (smallest first)</option>
-            <option value="size-desc" data-i18n="sortSizeDesc">File size (largest first)</option>
-          </select>
-          <div class="field-label label-micro"><span data-i18n="targetVideoCodec">Target Video Codec</span> <span class="info" data-tip-i18n="tipVideoCodec">i</span></div>
-          <select id="codec"><option value="" data-i18n="autoDominant">Auto dominant</option><option>h264</option><option>hevc</option><option>vp9</option><option>av1</option><option>mpeg4</option></select>
-          <div class="field-label label-micro"><span data-i18n="gpuAcceleration">GPU Acceleration</span> <span class="info" data-tip-i18n="tipGpu">i</span></div>
-          <select id="gpu"><option value="off">off</option><option value="auto">auto</option><option value="nvenc">nvenc</option><option value="qsv">qsv</option><option value="amf">amf</option><option value="videotoolbox">videotoolbox (macOS)</option></select>
-          <div class="field-label label-micro"><span data-i18n="gpuWorkers">GPU Concurrent Jobs</span> <span class="info" data-tip-i18n="tipGpuWorkers">i</span></div>
-          <select id="gpuWorkers"><option value="1">1</option><option value="2">2</option><option value="3">3</option></select>
-          <div class="field-label label-micro"><span data-i18n="targetAudioCodec">Target Audio Codec</span> <span class="info" data-tip-i18n="tipAudioCodec">i</span></div>
-          <select id="audioCodec"><option value="">Auto majority</option><option>aac</option><option>mp3</option><option>opus</option><option>vorbis</option><option>pcm_s16le</option></select>
-          <div class="field-label label-micro"><span data-i18n="qualityProfile">Quality Profile</span> <span class="info" data-tip-i18n="tipQualityProfile">i</span></div>
-          <select id="qualityProfile"><option value="balanced" data-i18n="qualityBalanced">Balanced</option><option value="high" data-i18n="qualityHigh">High Quality</option><option value="small" data-i18n="qualitySmall">Smaller File</option></select>
-          <div class="num-row">
-            <div><div class="field-label label-micro"><span data-i18n="crfQuality">CRF (Quality)</span> <span class="info" data-tip-i18n="tipCrf">i</span></div><div class="hint" data-i18n="lowerBetter">Lower = better</div></div>
-            <input id="crf" type="number" min="0" max="51" value="23">
-          </div>
-          <div class="field-label label-micro"><span data-i18n="preset">Preset</span> <span class="info" data-tip-i18n="tipPreset">i</span></div>
-          <select id="preset"><option>ultrafast</option><option>superfast</option><option>veryfast</option><option>faster</option><option>fast</option><option selected>medium</option><option>slow</option><option>slower</option><option>veryslow</option></select>
-          <div class="field-label label-micro"><span data-i18n="fpsPolicy">FPS Policy</span> <span class="info" data-tip-i18n="tipFpsPolicy">i</span></div>
-          <select id="fpsPolicy"><option>majority</option><option>max</option><option>min</option></select>
-          <div class="field-label label-micro"><span data-i18n="resolutionPolicy">Resolution Policy</span> <span class="info" data-tip-i18n="tipResolutionPolicy">i</span></div>
-          <select id="resolutionPolicy"><option value="dominant" data-i18n="resolutionDominant">Dominant source</option><option value="largest" data-i18n="resolutionLargest">Largest canvas</option></select>
-          <div class="field-label label-micro"><span data-i18n="padColor">Pad Color</span> <span class="info" data-tip-i18n="tipPadColor">i</span></div>
-          <input id="padColor" value="black">
-          <div class="field-label label-micro"><span data-i18n="ffmpegPath">FFmpeg Path</span> <span class="info" data-tip-i18n="tipFfmpegPath">i</span></div>
-          <input id="ffmpegPath" placeholder="Optional">
-          <div class="field-label label-micro"><span data-i18n="ffprobePath">FFprobe Path</span> <span class="info" data-tip-i18n="tipFfprobePath">i</span></div>
-          <input id="ffprobePath" placeholder="Optional">
-          <div class="toggle"><div class="toggle-text"><span class="toggle-title"><span data-i18n="recursiveScan">Recursive Scan</span> <span class="info" data-tip-i18n="tipRecursive">i</span></span></div><input id="recursive" type="checkbox" checked></div>
-          <div class="toggle"><div class="toggle-text"><span class="toggle-title"><span data-i18n="overwrite">Overwrite</span> <span class="info" data-tip-i18n="tipOverwrite">i</span></span></div><input id="overwrite" type="checkbox"></div>
-          <div class="toggle"><div class="toggle-text"><span class="toggle-title"><span data-i18n="dryRun">Dry Run</span> <span class="info" data-tip-i18n="tipDryRun">i</span></span></div><input id="dryRun" type="checkbox"></div>
-          <div class="toggle"><div class="toggle-text"><span class="toggle-title"><span data-i18n="keepTempFiles">Keep Temp Files</span> <span class="info" data-tip-i18n="tipKeepTemp">i</span></span></div><input id="keepTemp" type="checkbox"></div>
-          <div class="toggle"><div class="toggle-text"><span class="toggle-title"><span data-i18n="autoDownloadDeps">Auto Download Deps</span> <span class="info" data-tip-i18n="tipAutoDownload">i</span></span></div><input id="autoDownloadDeps" type="checkbox" checked></div>
-          <div class="toggle"><div class="toggle-text"><span class="toggle-title"><span data-i18n="notifyOnComplete">Completion Notification</span> <span class="info" data-tip-i18n="tipNotify">i</span></span></div><input id="notifyOnComplete" type="checkbox" checked></div>
-          <div class="toggle"><div class="toggle-text"><span class="toggle-title"><span data-i18n="playSoundOnComplete">Completion Sound</span> <span class="info" data-tip-i18n="tipSound">i</span></span></div><input id="playSoundOnComplete" type="checkbox"></div>
-        </div>
-      </div>
-      <div class="dock"><button class="btn-primary" id="startMerge"></button></div>
-    </aside>
-  </main>
-  <div class="tooltip" id="tooltip"></div>
-  <div class="toast" id="toast"><div class="toast-title" id="toastTitle"></div><div class="toast-body" id="toastBody"></div></div>
-  <script>
-    const messages = {
-      en: {
-        ffmpegNotChecked: "! FFmpeg Not Checked", ffmpegChecking: "... Checking FFmpeg", ffmpegInstalled: "✓ FFmpeg Installed", ffmpegMissing: "! FFmpeg Missing", refreshFfmpeg: "Refresh FFmpeg check",
-        sourceFiles: "Source Files", noFolderSelected: "No folder or files selected", selectFolder: "Select Folder", selectFiles: "Select Files", filename: "Filename", resolution: "Resolution", codec: "Codec", duration: "Dur", mediaCreatedTime: "Media Created", fileSize: "Size", status: "Status", actions: "Actions", selectionColumn: "Selection", resizeColumn: "Resize column", resetColumnWidth: "Double-click to restore automatic width", columnResizeHint: "Drag a header grip to resize; double-click to restore automatic width.",
-        processConsole: "Process Console", configuration: "Configuration", mergeStrategy: "Merge Strategy", outputSettings: "Output Settings", browse: "Browse",
-        fastMerge: "Fast Merge", optimalMerge: "Optimal Merge", extremeMerge: "Extreme Merge", lossless: "Lossless", smart: "Smart", bruteForce: "Brute Force",
-        fastDesc: "Stream copy only. Skips incompatible groups.", optimalDesc: "Groups by orientation and transcodes when needed.", extremeDesc: "Normalizes all files into one output.",
-        outputFilenamePrefix: "Output Filename Prefix", outputFolder: "Output Folder", tempFolder: "Temp Folder", outputFormat: "Output Format", mergeSortOrder: "Merge Sort Order", targetVideoCodec: "Target Video Codec",
-        gpuAcceleration: "GPU Acceleration", gpuWorkers: "GPU Concurrent Jobs", targetAudioCodec: "Target Audio Codec", qualityProfile: "Quality Profile", qualityBalanced: "Balanced", qualityHigh: "High Quality", qualitySmall: "Smaller File", crfQuality: "CRF (Quality)", lowerBetter: "Lower = better", preset: "Preset",
-        autoDominant: "Auto dominant", resolutionDominant: "Dominant source", resolutionLargest: "Largest canvas",
-        fpsPolicy: "FPS Policy", resolutionPolicy: "Resolution Policy", padColor: "Pad Color", ffmpegPath: "FFmpeg Path", ffprobePath: "FFprobe Path",
-        recursiveScan: "Recursive Scan", overwrite: "Overwrite", dryRun: "Dry Run", keepTempFiles: "Keep Temp Files", autoDownloadDeps: "Auto Download Deps",
-        notifyOnComplete: "Completion Notification", playSoundOnComplete: "Completion Sound",
-        outputDirHint: "Leave empty to use the default merged folder under the source directory.", tempDirHint: "Leave empty to use the system default temp directory.",
-        sortNameNaturalAsc: "Filename natural (A-Z)", sortNameNaturalDesc: "Filename natural (Z-A)", sortNameAsc: "Filename text (A-Z)", sortNameDesc: "Filename text (Z-A)",
-        sortMediaCreatedAsc: "Media created (oldest first)", sortMediaCreatedDesc: "Media created (newest first)",
-        sortSizeAsc: "File size (smallest first)", sortSizeDesc: "File size (largest first)",
-        startMerge: "▷ START MERGE", stopMerge: "■ STOP MERGE", switchLanguage: "Switch language",
-        modeSelected: "{mode} MODE SELECTED", selectFolderPlan: "Select a folder to preview the merge plan.",
-        selectAllFiles: "Select All", clearFileSelection: "Clear Selection", selectedCount: "{selected}/{total} selected", noSelectedFiles: "Select at least one file to merge.",
-        fastPlan: "Tool will stream-copy compatible groups only. Incompatible files will be skipped.",
-        optimalPlan: "Tool will create up to {count} output file(s), separated by landscape and portrait display orientation.",
-        extremePlan: "Tool will normalize all files to one display canvas and produce one output file.",
-        orientationLandscape: "Landscape Videos", orientationPortrait: "Portrait Videos", orientationUnknown: "Other Videos", groupCount: "{count} files",
-        visualGroupingHint: "Orientation groups are visual only; merge order still follows the selected global sort.",
-        ready: "Ready", needsRemux: "Remux Only", needsAudio: "Audio Only", needsTranscode: "Needs Transcode", rotationRequired: "Rotation Requires Transcode", skipped: "Skipped", excluded: "Not Selected", summary: "{files} files detected - {groups} groups",
-        planCounts: "{copy} copy, {remux} remux, {audio} audio only, {transcode} video transcode, {skipped} skipped.",
-        openFile: "Play with the system default video player", rotateClockwise: "Rotate clockwise 90° for this merge", excludeFile: "Exclude from this merge without deleting the source", restoreFile: "Restore to this merge", rotatedClockwise: "CW {degrees}°",
-        fastRotationUnsupported: "Manual rotation requires Optimal or Extreme mode. Fast mode only performs stream copy.",
-        openFileFailed: "Could not open the video with the system default player.",
-        folderCancelled: "Folder selection was cancelled or is unavailable on this system.", filesCancelled: "File selection was cancelled or contained no supported videos.", scanning: "Analyzing source videos", filesAnalyzed: "{count} files analyzed.",
-        startingMerge: "Starting {mode} merge", stoppingMerge: "Stopping current merge task...", selectBegin: "Select a source folder to begin.",
-        mergeCompletedTitle: "Merge Completed", mergeCompletedBody: "Your video merge task has finished.", mergeFailedTitle: "Merge Failed", mergeFailedBody: "The merge task ended with an error. Check the process console for details.",
-        mergeStoppedTitle: "Merge Stopped", mergeStoppedBody: "The merge task was stopped by the user.",
-        tipName: "Maps to --name. Leave empty to use automatic names based on folder, mode, and resolution.",
-        tipOutputDir: "Maps to --output-dir. Leave empty to create/use a merged folder under the source directory.",
-        tipTempDir: "Maps to --temp-dir. Leave empty to use the system default temp directory.",
-        tipOutputFormat: "Maps to --output-format. Supported containers: mp4, mkv, mov, avi, ts, webm.",
-        tipSortOrder: "Maps to --sort-by. Controls the scan, preview, preprocessing, and final merge order.",
-        tipVideoCodec: "Maps to --video-codec. Leave empty to preserve the dominant compatible source codec.",
-        tipGpu: "Maps to --gpu. auto chooses the native encoder when available and falls back to CPU when needed.",
-        tipGpuWorkers: "Maps to --gpu-workers. One job minimizes GPU pressure; two or three may improve throughput on high-end hardware.",
-        tipAudioCodec: "Maps to --audio-codec. Compatible source audio is copied when possible; incompatible audio is re-encoded only when needed.",
-        tipQualityProfile: "Maps to --quality-profile. balanced uses CRF 23, high uses CRF 20, small uses CRF 25.",
-        tipCrf: "Maps to --crf. Overrides the quality profile. Lower means better quality and larger files.",
-        tipPreset: "Maps to --preset. Slower presets usually produce smaller files at the same CRF but take longer.",
-        tipFpsPolicy: "Maps to --fps-policy. majority uses the most common FPS; max/min choose the highest/lowest FPS.",
-        tipResolutionPolicy: "Maps to --resolution-policy. dominant minimizes transcoding; largest preserves the previous largest-canvas behavior.",
-        tipPadColor: "Maps to --pad-color. Used when videos are scaled into a canvas without cropping.",
-        tipFfmpegPath: "Maps to --ffmpeg-path. Optional explicit path to ffmpeg binary.",
-        tipFfprobePath: "Maps to --ffprobe-path. Optional explicit path to ffprobe binary.",
-        tipRecursive: "Maps to --recursive / --no-recursive. When enabled, scans subfolders.",
-        tipOverwrite: "Maps to --overwrite. Replace existing output files instead of appending a numeric suffix.",
-        tipDryRun: "Maps to --dry-run. Prints commands and plan without running FFmpeg.",
-        tipKeepTemp: "Maps to --keep-temp. Keeps preprocessed intermediate files for inspection.",
-        tipAutoDownload: "Maps to --auto-download-deps / --no-auto-download-deps. Attempts to download ffmpeg/ffprobe when missing.",
-        tipNotify: "Shows an in-app notification when a merge task completes, fails, or is stopped.",
-        tipSound: "Plays a short in-app sound together with the completion notification."
-      },
-      zh: {
-        ffmpegNotChecked: "! FFmpeg 未检查", ffmpegChecking: "... 正在检查 FFmpeg", ffmpegInstalled: "✓ FFmpeg 已安装", ffmpegMissing: "! FFmpeg 缺失", refreshFfmpeg: "重新检查 FFmpeg",
-        sourceFiles: "源文件", noFolderSelected: "未选择文件夹或视频", selectFolder: "选择文件夹", selectFiles: "选择文件", filename: "文件名", resolution: "分辨率", codec: "编码", duration: "时长", mediaCreatedTime: "创建媒体日期", fileSize: "大小", status: "状态", actions: "操作", selectionColumn: "选择", resizeColumn: "调整列宽", resetColumnWidth: "双击恢复自适应宽度", columnResizeHint: "拖动表头的 ⋮ 调整列宽；双击恢复自适应宽度。",
-        processConsole: "处理控制台", configuration: "配置", mergeStrategy: "合并策略", outputSettings: "输出设置", browse: "浏览",
-        fastMerge: "快速合并", optimalMerge: "智能合并", extremeMerge: "强制合并", lossless: "无损", smart: "智能", bruteForce: "强制",
-        fastDesc: "仅使用流复制，跳过不兼容分组。", optimalDesc: "按横竖屏分组，必要时转码。", extremeDesc: "统一所有文件到一个输出。",
-        outputFilenamePrefix: "输出文件名前缀", outputFolder: "输出目录", tempFolder: "临时目录", outputFormat: "输出格式", mergeSortOrder: "合并排序方式", targetVideoCodec: "目标视频编码",
-        gpuAcceleration: "GPU 加速", gpuWorkers: "GPU 并发任务", targetAudioCodec: "目标音频编码", qualityProfile: "质量策略", qualityBalanced: "均衡", qualityHigh: "高质量", qualitySmall: "更小体积", crfQuality: "CRF（质量）", lowerBetter: "越低质量越高", preset: "编码预设",
-        autoDominant: "自动选择主流编码", resolutionDominant: "主流源规格", resolutionLargest: "最大画布",
-        fpsPolicy: "帧率策略", resolutionPolicy: "分辨率策略", padColor: "填充颜色", ffmpegPath: "FFmpeg 路径", ffprobePath: "FFprobe 路径",
-        recursiveScan: "递归扫描", overwrite: "覆盖输出", dryRun: "试运行", keepTempFiles: "保留临时文件", autoDownloadDeps: "自动下载依赖",
-        notifyOnComplete: "完成后提示", playSoundOnComplete: "完成提示音",
-        outputDirHint: "留空时默认使用源目录下的 merged 文件夹。", tempDirHint: "留空时使用系统默认临时目录。",
-        sortNameNaturalAsc: "文件名自然升序", sortNameNaturalDesc: "文件名自然降序", sortNameAsc: "文件名文本升序", sortNameDesc: "文件名文本降序",
-        sortMediaCreatedAsc: "创建媒体日期从旧到新", sortMediaCreatedDesc: "创建媒体日期从新到旧",
-        sortSizeAsc: "文件大小从小到大", sortSizeDesc: "文件大小从大到小",
-        startMerge: "▷ 开始合并", stopMerge: "■ 停止合并", switchLanguage: "切换语言",
-        modeSelected: "已选择 {mode} 模式", selectFolderPlan: "选择文件夹后预览合并计划。",
-        selectAllFiles: "全选", clearFileSelection: "取消选中", selectedCount: "已选 {selected}/{total}", noSelectedFiles: "请至少选择一个要合并的视频文件。",
-        fastPlan: "工具将仅对兼容分组合并，跳过不兼容文件。",
-        optimalPlan: "工具将按横竖屏生成最多 {count} 个输出文件。",
-        extremePlan: "工具将把所有文件统一到一个画布并生成一个输出文件。",
-        orientationLandscape: "横向视频", orientationPortrait: "竖向视频", orientationUnknown: "其他视频", groupCount: "{count} 个",
-        visualGroupingHint: "横竖分组仅用于查看；实际合并仍按所选规则统一排序。",
-        ready: "就绪", needsRemux: "仅重封装", needsAudio: "仅音频转码", needsTranscode: "需要视频转码", rotationRequired: "旋转需要转码", skipped: "将跳过", excluded: "未选中", summary: "检测到 {files} 个文件 - {groups} 个分组",
-        planCounts: "直通 {copy} 个，重封装 {remux} 个，仅音频 {audio} 个，视频转码 {transcode} 个，跳过 {skipped} 个。",
-        openFile: "使用系统默认视频播放器播放", rotateClockwise: "本次合并顺时针旋转 90°", excludeFile: "从本次合并排除，不删除源文件", restoreFile: "恢复到本次合并", rotatedClockwise: "顺时针 {degrees}°",
-        fastRotationUnsupported: "人工旋转需要使用智能合并或强制合并；快速合并只执行流复制。",
-        openFileFailed: "无法使用系统默认播放器打开视频。",
-        folderCancelled: "文件夹选择已取消，或当前系统不可用。", filesCancelled: "文件选择已取消，或未包含支持的视频。", scanning: "正在分析源视频", filesAnalyzed: "已分析 {count} 个文件。",
-        startingMerge: "开始 {mode} 合并", stoppingMerge: "正在停止当前合并任务...", selectBegin: "请选择源文件夹开始。",
-        mergeCompletedTitle: "合并完成", mergeCompletedBody: "视频合并任务已完成。", mergeFailedTitle: "合并失败", mergeFailedBody: "合并任务发生错误，请查看处理控制台。", mergeStoppedTitle: "合并已停止", mergeStoppedBody: "用户已手动停止当前合并任务。",
-        tipName: "对应 --name。留空时根据文件夹、模式和分辨率自动命名。",
-        tipOutputDir: "对应 --output-dir。留空时在源目录下创建或使用 merged 文件夹。",
-        tipTempDir: "对应 --temp-dir。留空时使用系统默认临时目录。",
-        tipOutputFormat: "对应 --output-format。支持 mp4、mkv、mov、avi、ts、webm。",
-        tipSortOrder: "对应 --sort-by。控制扫描、预览、预处理和最终合并顺序。",
-        tipVideoCodec: "对应 --video-codec。留空时优先保持兼容的主流源编码。",
-        tipGpu: "对应 --gpu。auto 会优先选择可用的系统原生编码器，必要时回退 CPU。",
-        tipGpuWorkers: "对应 --gpu-workers。1 个任务可降低 GPU 压力，高性能设备可选择 2 或 3。",
-        tipAudioCodec: "对应 --audio-codec。兼容的源音频会尽量复制，只在必要时重编码。",
-        tipQualityProfile: "对应 --quality-profile。均衡使用 CRF 23，高质量使用 CRF 20，更小体积使用 CRF 25。",
-        tipCrf: "对应 --crf。会覆盖质量策略。数值越低质量越高，文件越大。",
-        tipPreset: "对应 --preset。更慢的预设通常体积更小，但耗时更长。",
-        tipFpsPolicy: "对应 --fps-policy。majority 使用最常见帧率，max/min 选择最高/最低帧率。",
-        tipResolutionPolicy: "对应 --resolution-policy。主流源规格会尽量减少转码，最大画布保留原来的最大分辨率行为。",
-        tipPadColor: "对应 --pad-color。视频缩放到画布且不裁剪时使用。",
-        tipFfmpegPath: "对应 --ffmpeg-path。可选的 ffmpeg 二进制路径。",
-        tipFfprobePath: "对应 --ffprobe-path。可选的 ffprobe 二进制路径。",
-        tipRecursive: "对应 --recursive / --no-recursive。启用后扫描子文件夹。",
-        tipOverwrite: "对应 --overwrite。替换已有输出，不追加数字后缀。",
-        tipDryRun: "对应 --dry-run。只打印命令和计划，不运行 FFmpeg。",
-        tipKeepTemp: "对应 --keep-temp。保留预处理临时文件用于检查。",
-        tipAutoDownload: "对应 --auto-download-deps / --no-auto-download-deps。缺少 ffmpeg/ffprobe 时尝试自动下载。",
-        tipNotify: "合并完成、失败或停止后，在应用内显示提示。",
-        tipSound: "显示完成提示时播放一段短提示音。"
-      }
-    };
-    const state = {
-      mode: "optimal",
-      inputDir: "",
-      scannedInputDir: "",
-      sourceFiles: [],
-      files: [],
-      selectedPaths: new Set(),
-      rotationOverrides: new Map(),
-      visualOrientations: new Map(),
-      plan: null,
-      running: false,
-      statusTimer: null,
-      mergeWasRunning: false,
-      logCursor: 0,
-      runLogs: [],
-      lang: "__DEFAULT_LANG__",
-      deps: { status: "notChecked", message: "" },
-      defaults: {}
-    };
-    const pathFields = ["outputDir", "tempDir", "ffmpegPath", "ffprobePath"];
-    const defaultColumnWidths = [46, 180, 95, 100, 65, 75, 140, 75, 110, 76];
-    const minColumnWidths = [46, 140, 68, 76, 52, 58, 104, 58, 76, 76];
-    const filenameColumnIndex = 1;
-    let columnWidths = [...defaultColumnWidths];
-    let columnWidthOverrides = {};
-    let columnFitFrame = null;
-    const textMeasureCanvas = document.createElement("canvas");
-    const textMeasureContext = textMeasureCanvas.getContext("2d");
-    const $ = (id) => document.getElementById(id);
-    const t = (key, values = {}) => {
-      let text = (messages[state.lang] && messages[state.lang][key]) || messages.en[key] || key;
-      Object.entries(values).forEach(([name, value]) => { text = text.replace(`{${name}}`, value); });
-      return text;
-    };
-    function applyLanguage() {
-      document.documentElement.lang = state.lang === "zh" ? "zh-Hans" : "en";
-      document.querySelectorAll("[data-i18n]").forEach(node => { node.textContent = t(node.dataset.i18n); });
-      document.querySelectorAll("[data-tip-i18n]").forEach(node => { node.dataset.tip = t(node.dataset.tipI18n); });
-      $("languageSelect").value = state.lang;
-      $("languageSelect").title = t("switchLanguage");
-      document.querySelectorAll(".column-resize-handle").forEach(handle => {
-        const label = handle.parentElement.textContent.trim() || t("selectionColumn");
-        handle.setAttribute("aria-label", `${t("resizeColumn")}: ${label}`);
-        handle.title = `${t("resizeColumn")}: ${label}. ${t("resetColumnWidth")}`;
-      });
-      renderDepStatus();
-      setRunning(state.running);
-      renderModes();
-      if (state.files.length) renderFiles(state.files);
-      else updateSelectionControls();
-      scheduleColumnFit();
-      if (!state.files.length && !state.inputDir) $("summary").textContent = t("noFolderSelected");
-    }
-    function renderDepStatus() {
-      const keys = {
-        notChecked: "ffmpegNotChecked",
-        checking: "ffmpegChecking",
-        installed: "ffmpegInstalled",
-        missing: "ffmpegMissing"
-      };
-      const badge = $("ffmpegStatus");
-      badge.textContent = t(keys[state.deps.status] || "ffmpegNotChecked");
-      badge.title = state.deps.message ? `${t("refreshFfmpeg")}: ${state.deps.message}` : t("refreshFfmpeg");
-      badge.disabled = state.deps.status === "checking";
-    }
-    function log(message) {
-      const stamp = new Date().toTimeString().slice(0, 8);
-      appendLogLines([`[${stamp}] ${message}`]);
-    }
-    function appendLogLines(lines) {
-      if (!lines || !lines.length) return;
-      $("logs").append(document.createTextNode(`${lines.join("\n")}\n`));
-      $("logs").scrollTop = $("logs").scrollHeight;
-    }
-    function progress(value) {
-      const clamped = Math.max(0, Math.min(100, value));
-      $("progressText").textContent = `${clamped}%`;
-      $("bar").style.width = `${clamped}%`;
-    }
-    function setRunning(running) {
-      state.running = running;
-      const button = $("startMerge");
-      button.textContent = running ? t("stopMerge") : t("startMerge");
-      button.classList.toggle("stop", running);
-      document.querySelectorAll(".file-checkbox, .file-action").forEach(node => { node.disabled = running; });
-      updateSelectionControls();
-    }
-    async function api(path, body) {
-      const headers = {"X-VideoMergingTool-Token": "__API_TOKEN__"};
-      if (body) headers["Content-Type"] = "application/json";
-      const response = await fetch(path, {
-        method: body ? "POST" : "GET",
-        headers,
-        body: body ? JSON.stringify(body) : undefined
-      });
-      const payload = await response.json();
-      if (!response.ok) throw new Error(payload.error || payload.message || response.statusText);
-      return payload;
-    }
-    function readConfig() {
-      const values = { lang: state.lang, mode: state.mode, columnWidths: { ...columnWidthOverrides } };
-      const ids = ["format", "sortBy", "codec", "gpu", "gpuWorkers", "audioCodec", "qualityProfile", "crf", "preset", "fpsPolicy", "resolutionPolicy", "padColor", "outputDir", "tempDir", "ffmpegPath", "ffprobePath", "recursive", "overwrite", "dryRun", "keepTemp", "autoDownloadDeps", "notifyOnComplete", "playSoundOnComplete"];
-      ids.forEach(id => {
-        const node = $(id);
-        if (pathFields.includes(id) && node.dataset.custom !== "true") return;
-        values[id] = node.type === "checkbox" ? node.checked : node.value;
-      });
-      return values;
-    }
-    function applyConfig(config) {
-      if (!config || typeof config !== "object") return;
-      if (config.resolutionPolicy === "largest" && config.gpuWorkers == null) {
-        config = { ...config, resolutionPolicy: "dominant", gpuWorkers: "1" };
-      }
-      if (config.lang && messages[config.lang]) state.lang = config.lang;
-      if (config.mode) state.mode = config.mode;
-      Object.entries(config).forEach(([id, value]) => {
-        if (id === "columnWidths") return;
-        const node = $(id);
-        if (!node) return;
-        if (pathFields.includes(id)) node.dataset.custom = value ? "true" : "false";
-        if (node.type === "checkbox") node.checked = Boolean(value);
-        else node.value = value;
-      });
-      columnWidthOverrides = normalizeColumnWidthOverrides(config.columnWidths);
-      scheduleColumnFit(true);
-    }
-    function normalizeColumnWidthOverrides(value) {
-      if (!value || Array.isArray(value) || typeof value !== "object") return {};
-      return Object.fromEntries(
-        Object.entries(value)
-          .map(([index, width]) => [String(Number(index)), Number(width)])
-          .filter(([index, width]) => Number.isInteger(Number(index)) && Number(index) >= 0 && Number(index) < defaultColumnWidths.length && Number.isFinite(width))
-      );
-    }
-    function measureNodeText(node) {
-      if (!node || !textMeasureContext) return 0;
-      const text = (node.textContent || "").replace(/\s+/g, " ").trim();
-      if (!text) return 0;
-      const style = getComputedStyle(node);
-      textMeasureContext.font = `${style.fontStyle} ${style.fontWeight} ${style.fontSize} ${style.fontFamily}`;
-      return Math.ceil(textMeasureContext.measureText(text).width);
-    }
-    function naturalColumnWidth(index) {
-      if (index === 0) return minColumnWidths[0];
-      if (index === filenameColumnIndex) return minColumnWidths[index];
-      const header = $("videoTable").querySelector(`thead th:nth-child(${index + 1})`);
-      const label = header ? header.querySelector(":scope > span:not(.column-resize-handle)") : null;
-      let width = measureNodeText(label || header) + 38;
-      $("fileRows").querySelectorAll(`tr.file-row td:nth-child(${index + 1})`).forEach(cell => {
-        const content = cell.querySelector(".file-actions") || cell;
-        width = Math.max(width, measureNodeText(content) + 24);
-      });
-      return Math.max(minColumnWidths[index], Math.ceil(width));
-    }
-    function calculateColumnWidths() {
-      const widths = defaultColumnWidths.map((fallback, index) => {
-        if (index === filenameColumnIndex) return minColumnWidths[index];
-        const natural = naturalColumnWidth(index);
-        const override = Number(columnWidthOverrides[index]);
-        return Math.min(1200, Math.max(natural, Number.isFinite(override) ? override : 0));
-      });
-      const available = Math.max(0, $("tableWrap").clientWidth - 2);
-      const otherWidth = widths.reduce((sum, width, index) => index === filenameColumnIndex ? sum : sum + width, 0);
-      const filenameOverride = Number(columnWidthOverrides[filenameColumnIndex]);
-      widths[filenameColumnIndex] = Math.min(
-        1200,
-        Math.max(
-          minColumnWidths[filenameColumnIndex],
-          available - otherWidth,
-          Number.isFinite(filenameOverride) ? filenameOverride : 0
-        )
-      );
-      return widths.map(width => Math.round(width));
-    }
-    function applyColumnWidths(widths, resetScroll = false) {
-      const cols = Array.from($("videoColumns").children);
-      columnWidths = widths;
-      cols.forEach((col, index) => { col.style.width = `${columnWidths[index]}px`; });
-      document.querySelectorAll(".column-resize-handle").forEach((handle, index) => {
-        handle.setAttribute("aria-valuemin", String(minColumnWidths[index]));
-        handle.setAttribute("aria-valuemax", "1200");
-        handle.setAttribute("aria-valuenow", String(columnWidths[index]));
-      });
-      $("videoTable").style.width = `${columnWidths.reduce((sum, width) => sum + width, 0)}px`;
-      $("videoTable").style.minWidth = "0";
-      if (resetScroll) $("tableWrap").scrollLeft = 0;
-    }
-    function fitColumnsToContent(resetScroll = false) {
-      applyColumnWidths(calculateColumnWidths(), resetScroll);
-    }
-    function scheduleColumnFit(resetScroll = false) {
-      if (columnFitFrame !== null) cancelAnimationFrame(columnFitFrame);
-      columnFitFrame = requestAnimationFrame(() => {
-        columnFitFrame = null;
-        fitColumnsToContent(resetScroll);
-      });
-    }
-    function setColumnWidth(index, width) {
-      columnWidthOverrides[index] = Math.max(minColumnWidths[index], Math.min(1200, Math.round(width)));
-      fitColumnsToContent();
-    }
-    function resetColumnWidth(index) {
-      delete columnWidthOverrides[index];
-      fitColumnsToContent();
-      scheduleSaveConfig();
-    }
-    function installColumnResize() {
-      document.querySelectorAll(".column-resize-handle").forEach(handle => {
-        const index = Number(handle.dataset.column);
-        let startX = 0;
-        let startWidth = 0;
-        let activePointer = null;
-        handle.addEventListener("pointerdown", event => {
-          if (event.button !== 0) return;
-          event.preventDefault();
-          activePointer = event.pointerId;
-          startX = event.clientX;
-          startWidth = columnWidths[index];
-          handle.setPointerCapture(event.pointerId);
-          handle.classList.add("active");
-          document.body.classList.add("column-resizing");
-        });
-        handle.addEventListener("pointermove", event => {
-          if (event.pointerId === activePointer) setColumnWidth(index, startWidth + event.clientX - startX);
-        });
-        const finish = event => {
-          if (event.pointerId !== activePointer) return;
-          activePointer = null;
-          handle.classList.remove("active");
-          document.body.classList.remove("column-resizing");
-          scheduleSaveConfig();
-        };
-        handle.addEventListener("pointerup", finish);
-        handle.addEventListener("pointercancel", finish);
-        handle.addEventListener("dblclick", event => {
-          event.preventDefault();
-          resetColumnWidth(index);
-        });
-        handle.addEventListener("keydown", event => {
-          if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
-          event.preventDefault();
-          setColumnWidth(index, columnWidths[index] + (event.key === "ArrowRight" ? 1 : -1) * (event.shiftKey ? 24 : 8));
-          scheduleSaveConfig();
-        });
-      });
-      window.addEventListener("resize", () => scheduleColumnFit());
-    }
-    async function loadConfig() {
-      try { applyConfig(await api("/config")); } catch (error) { log(`ERROR: ${error.message}`); }
-    }
-    let saveTimer = null;
-    function scheduleSaveConfig() {
-      if (saveTimer) clearTimeout(saveTimer);
-      saveTimer = setTimeout(async () => {
-        try { await api("/config", readConfig()); } catch (error) { log(`ERROR: ${error.message}`); }
-      }, 250);
-    }
-    function applyDefaultPaths() {
-      const mapping = {
-        outputDir: "output_dir",
-        tempDir: "temp_dir",
-        ffmpegPath: "ffmpeg",
-        ffprobePath: "ffprobe"
-      };
-      pathFields.forEach(id => {
-        const node = $(id);
-        if (node.dataset.custom === "true") return;
-        node.value = state.defaults[mapping[id]] || "";
-      });
-    }
-    async function refreshDefaultPaths() {
-      try {
-        state.defaults = await api("/defaults", { input_dir: state.inputDir });
-        applyDefaultPaths();
-      } catch (error) {
-        log(`ERROR: ${error.message}`);
-      }
-    }
-    function configPathValue(id) {
-      const node = $(id);
-      return node.dataset.custom === "true" ? node.value : "";
-    }
-    async function checkDeps() {
-      state.deps = { status: "checking", message: "" };
-      renderDepStatus();
-      try {
-        const payload = await api("/deps");
-        state.defaults.ffmpeg = payload.ffmpeg || state.defaults.ffmpeg || "";
-        state.defaults.ffprobe = payload.ffprobe || state.defaults.ffprobe || "";
-        applyDefaultPaths();
-        state.deps = {
-          status: payload.ok ? "installed" : "missing",
-          message: payload.message || ""
-        };
-        renderDepStatus();
-        log(payload.message);
-      } catch (error) {
-        state.deps = { status: "missing", message: error.message };
-        renderDepStatus();
-        log(`ERROR: ${error.message}`);
-      }
-    }
-    function renderModes() {
-      document.querySelectorAll(".mode-card").forEach(card => {
-        card.classList.toggle("active", card.dataset.mode === state.mode);
-      });
-      $("planTitle").textContent = t("modeSelected", { mode: state.mode.toUpperCase() });
-      updatePlan();
-    }
-    function escapeHtml(value) {
-      return String(value ?? "").replace(/[&<>"']/g, char => ({
-        "&": "&amp;",
-        "<": "&lt;",
-        ">": "&gt;",
-        '"': "&quot;",
-        "'": "&#39;"
-      })[char]);
-    }
-    function mergeOrderedFiles() {
-      return state.files.filter(file => state.selectedPaths.has(file.path));
-    }
-    function selectedRotationCount() {
-      return mergeOrderedFiles().filter(file => (state.rotationOverrides.get(file.path) || 0) !== 0).length;
-    }
-    function rotationPayload() {
-      return Object.fromEntries(
-        Array.from(state.rotationOverrides.entries()).filter(([, rotation]) => rotation !== 0)
-      );
-    }
-    function updateSelectionControls() {
-      const total = state.files.length;
-      const selected = mergeOrderedFiles().length;
-      $("selectionCount").textContent = total ? t("selectedCount", { selected, total }) : "";
-      $("selectAllFiles").disabled = state.running || total === 0 || selected === total;
-      $("clearFileSelection").disabled = state.running || selected === 0;
-      if (!state.running) $("startMerge").disabled = selected === 0;
-    }
-    function selectAllFiles() {
-      state.selectedPaths = new Set(state.files.map(file => file.path));
-      renderFiles(state.files);
-      refreshPlan();
-    }
-    function clearFileSelection() {
-      state.selectedPaths.clear();
-      renderFiles(state.files);
-      refreshPlan();
-    }
-    function setFileSelected(path, selected) {
-      if (selected) state.selectedPaths.add(path);
-      else state.selectedPaths.delete(path);
-      renderFiles(state.files);
-      refreshPlan();
-    }
-    function rotateFile(path) {
-      const current = state.rotationOverrides.get(path) || 0;
-      const next = (current + 90) % 360;
-      if (next) state.rotationOverrides.set(path, next);
-      else state.rotationOverrides.delete(path);
-      renderFiles(state.files);
-      refreshPlan();
-    }
-    async function openFile(path) {
-      try {
-        await api("/open-media", { path });
-      } catch (error) {
-        log(`ERROR: ${error.message}`);
-        showToast(t("openFileFailed"), error.message, "error");
-      }
-    }
-    function updatePlan() {
-      if (!state.files.length) {
-        $("planText").textContent = t("selectFolderPlan");
-        return;
-      }
-      const files = mergeOrderedFiles();
-      if (!files.length) {
-        $("planText").textContent = t("noSelectedFiles");
-        return;
-      }
-      if (state.mode === "fast" && selectedRotationCount() > 0) {
-        $("planText").textContent = t("fastRotationUnsupported");
-        return;
-      }
-      const groups = new Set(files.map(file => file.orientation));
-      if (state.plan) {
-        $("planText").textContent = t("planCounts", {
-          copy: state.plan.copy_count || 0,
-          remux: state.plan.remux_count || 0,
-          audio: state.plan.audio_count || 0,
-          transcode: state.plan.transcode_count || 0,
-          skipped: state.plan.skipped_count || 0
-        });
-        return;
-      }
-      if (state.mode === "fast") {
-        $("planText").textContent = t("fastPlan");
-      } else if (state.mode === "optimal") {
-        $("planText").textContent = t("optimalPlan", { count: groups.size });
-      } else {
-        $("planText").textContent = t("extremePlan");
-      }
-    }
-    function renderFiles(files) {
-      const rows = $("fileRows");
-      rows.innerHTML = "";
-      const groupedFiles = { landscape: [], portrait: [], unknown: [] };
-      files.forEach(file => {
-        const visualOrientation = state.visualOrientations.get(file.path) || file.orientation;
-        const groupKey = visualOrientation === "portrait"
-          ? "portrait"
-          : visualOrientation === "unknown" ? "unknown" : "landscape";
-        groupedFiles[groupKey].push(file);
-      });
-      const groupDefinitions = [
-        ["landscape", "orientationLandscape"],
-        ["portrait", "orientationPortrait"],
-        ["unknown", "orientationUnknown"]
-      ];
-      groupDefinitions.forEach(([groupKey, labelKey]) => {
-        const group = groupedFiles[groupKey];
-        if (!group.length) return;
-        rows.insertAdjacentHTML("beforeend", `
-          <tr class="group-row ${groupKey}">
-            <td colspan="10"><span class="group-label"><span class="group-marker"></span>${escapeHtml(t(labelKey))}<span class="group-count">${escapeHtml(t("groupCount", { count: group.length }))}</span></span></td>
-          </tr>`);
-        group.forEach(file => {
-          const action = file.planned_action || "unknown";
-          const cls = action === "copy" || action === "remux"
-            ? "status-ok"
-            : action === "rotation_required" ? "status-blocked" : "status-warn";
-          const statusKeys = { copy: "ready", remux: "needsRemux", audio: "needsAudio", transcode: "needsTranscode", rotation_required: "rotationRequired", skipped: "skipped", excluded: "excluded" };
-          const status = t(statusKeys[action] || "needsTranscode");
-          const selected = state.selectedPaths.has(file.path);
-          const checked = selected ? "checked" : "";
-          const disabled = state.running ? "disabled" : "";
-          const manualRotation = state.rotationOverrides.get(file.path) || 0;
-          const rotationBadge = manualRotation
-            ? `<span class="rotation-badge" title="${escapeHtml(t("rotatedClockwise", { degrees: manualRotation }))}">↻${manualRotation}°</span>`
-            : "";
-          const removeClass = selected ? "remove" : "restore";
-          const removeTitle = selected ? t("excludeFile") : t("restoreFile");
-          const removeIcon = selected ? "−" : "↩";
-          rows.insertAdjacentHTML("beforeend", `
-            <tr class="file-row ${selected ? "" : "excluded"}">
-              <td class="select-cell"><input class="file-checkbox" type="checkbox" data-path="${escapeHtml(file.path)}" ${checked} ${disabled}></td>
-              <td title="${escapeHtml(file.path)}"><div class="file-name-content"><button class="file-link" type="button" data-action="open" data-path="${escapeHtml(file.path)}" title="${escapeHtml(t("openFile"))}">${escapeHtml(file.name)}</button>${rotationBadge}</div></td>
-              <td class="mono">${escapeHtml(file.display_width)}x${escapeHtml(file.display_height)}</td>
-              <td class="mono">${escapeHtml(file.video_codec)}/${escapeHtml(file.audio_codec || "none")}</td>
-              <td class="mono">${escapeHtml(file.fps)}</td>
-              <td class="mono">${escapeHtml(file.duration)}</td>
-              <td class="mono" title="${escapeHtml(file.path)}">${escapeHtml(file.media_created_time || "-")}</td>
-              <td class="mono">${escapeHtml(file.file_size || "-")}</td>
-              <td class="${cls}">${escapeHtml(status)}</td>
-              <td class="actions-cell"><div class="file-actions">
-                <button class="file-action rotate ${manualRotation ? "active" : ""}" type="button" data-action="rotate" data-path="${escapeHtml(file.path)}" title="${escapeHtml(t("rotateClockwise"))}" aria-label="${escapeHtml(t("rotateClockwise"))}" ${disabled}>↻</button>
-                <button class="file-action ${removeClass}" type="button" data-action="toggle" data-path="${escapeHtml(file.path)}" title="${escapeHtml(removeTitle)}" aria-label="${escapeHtml(removeTitle)}" ${disabled}>${removeIcon}</button>
-              </div></td>
-            </tr>`);
-        });
-      });
-      const groupCount = groupDefinitions.filter(([groupKey]) => groupedFiles[groupKey].length > 0).length;
-      $("summary").textContent = t("summary", { files: files.length, groups: groupCount }).toUpperCase();
-      rows.querySelectorAll(".file-checkbox").forEach(node => {
-        node.addEventListener("change", () => setFileSelected(node.dataset.path, node.checked));
-      });
-      rows.querySelectorAll("[data-action='open']").forEach(node => {
-        node.addEventListener("click", () => openFile(node.dataset.path));
-      });
-      rows.querySelectorAll("[data-action='rotate']").forEach(node => {
-        node.addEventListener("click", () => rotateFile(node.dataset.path));
-      });
-      rows.querySelectorAll("[data-action='toggle']").forEach(node => {
-        node.addEventListener("click", () => setFileSelected(node.dataset.path, !state.selectedPaths.has(node.dataset.path)));
-      });
-      updateSelectionControls();
-      updatePlan();
-      scheduleColumnFit();
-    }
-    function planPayload() {
-      return {
-        mode: state.mode,
-        output_format: $("format").value,
-        video_codec: $("codec").value,
-        audio_codec: $("audioCodec").value,
-        fps_policy: $("fpsPolicy").value,
-        resolution_policy: $("resolutionPolicy").value,
-        selected_files: mergeOrderedFiles().map(file => file.path),
-        rotation_overrides: rotationPayload()
-      };
-    }
-    function applyPlan(payload) {
-      state.files = payload.files || state.files;
-      state.plan = payload.plan || null;
-      renderFiles(state.files);
-    }
-    function syncVisualOrientations(files, reset = false) {
-      if (reset) state.visualOrientations.clear();
-      const currentPaths = new Set(files.map(file => file.path));
-      Array.from(state.visualOrientations.keys()).forEach(path => {
-        if (!currentPaths.has(path)) state.visualOrientations.delete(path);
-      });
-      files.forEach(file => {
-        if (!state.visualOrientations.has(file.path)) {
-          state.visualOrientations.set(file.path, file.orientation);
-        }
-      });
-    }
-    let planTimer = null;
-    let planVersion = 0;
-    function refreshPlan() {
-      if (!state.files.length) return;
-      if (planTimer) clearTimeout(planTimer);
-      const version = ++planVersion;
-      planTimer = setTimeout(async () => {
-        try {
-          const payload = await api("/plan", planPayload());
-          if (version === planVersion) applyPlan(payload);
-        }
-        catch (error) { log(`ERROR: ${error.message}`); }
-      }, 120);
-    }
-    async function selectFolder(kind) {
-      try {
-        const result = await api(`/pick-folder?kind=${kind}&lang=${encodeURIComponent(state.lang)}`);
-        if (!result.path) {
-          log(t("folderCancelled"));
-          return;
-        }
-        if (kind === "source") {
-          if (state.scannedInputDir && state.scannedInputDir !== result.path) {
-            state.files = [];
-            state.selectedPaths.clear();
-            state.rotationOverrides.clear();
-            state.visualOrientations.clear();
-            state.plan = null;
-          }
-          state.sourceFiles = [];
-          state.inputDir = result.path;
-          await refreshDefaultPaths();
-          await scan();
-        } else {
-          const id = kind === "temp" ? "tempDir" : "outputDir";
-          $(id).value = result.path;
-          $(id).dataset.custom = "true";
-          scheduleSaveConfig();
-        }
-      } catch (error) { log(`ERROR: ${error.message}`); }
-    }
-    async function selectVideoFiles() {
-      try {
-        const result = await api(`/pick-files?lang=${encodeURIComponent(state.lang)}`);
-        if (!result.paths || !result.paths.length) {
-          log(t("filesCancelled"));
-          return;
-        }
-        state.files = [];
-        state.selectedPaths.clear();
-        state.rotationOverrides.clear();
-        state.visualOrientations.clear();
-        state.plan = null;
-        state.scannedInputDir = "";
-        state.sourceFiles = result.paths;
-        state.inputDir = result.input_dir;
-        await refreshDefaultPaths();
-        await scan();
-      } catch (error) { log(`ERROR: ${error.message}`); }
-    }
-    async function scan() {
-      if (!state.inputDir) return selectFolder("source");
-      progress(5);
-      log(t("scanning"));
-      try {
-        const preserveState = state.scannedInputDir === state.inputDir;
-        const previousKnownPaths = new Set(state.files.map(file => file.path));
-        const previousSelectedPaths = new Set(state.selectedPaths);
-        const payload = await api("/scan", {
-          input_dir: state.inputDir,
-          source_files: state.sourceFiles,
-          output_dir: $("outputDir").value.trim(),
-          recursive: $("recursive").checked,
-          sort_by: $("sortBy").value,
-          ...planPayload()
-        });
-        syncVisualOrientations(payload.files, !preserveState);
-        state.files = payload.files;
-        state.plan = payload.plan || null;
-        state.selectedPaths = new Set(
-          payload.files
-            .filter(file => !preserveState || !previousKnownPaths.has(file.path) || previousSelectedPaths.has(file.path))
-            .map(file => file.path)
-        );
-        const currentPaths = new Set(payload.files.map(file => file.path));
-        state.rotationOverrides = new Map(
-          Array.from(state.rotationOverrides.entries()).filter(([path]) => currentPaths.has(path))
-        );
-        state.scannedInputDir = state.inputDir;
-        if (state.selectedPaths.size !== payload.files.length || state.rotationOverrides.size > 0) {
-          applyPlan(await api("/plan", planPayload()));
-        } else {
-          renderFiles(payload.files);
-        }
-        progress(100);
-        log(t("filesAnalyzed", { count: payload.files.length }));
-      } catch (error) {
-        progress(0);
-        log(`ERROR: ${error.message}`);
-      }
-    }
-    async function merge() {
-      if (state.running) {
-        await cancelMerge();
-        return;
-      }
-      if (!state.inputDir) {
-        await selectFolder("source");
-        if (!state.inputDir) return;
-      }
-      const files = mergeOrderedFiles();
-      if (!files.length) {
-        log(t("noSelectedFiles"));
-        updateSelectionControls();
-        return;
-      }
-      if (state.mode === "fast" && selectedRotationCount() > 0) {
-        log(t("fastRotationUnsupported"));
-        showToast(t("mergeFailedTitle"), t("fastRotationUnsupported"), "error");
-        return;
-      }
-      progress(4);
-      log(t("startingMerge", { mode: state.mode }));
-      try {
-        const payload = await api("/merge", {
-          input_dir: state.inputDir,
-          mode: state.mode,
-          name: $("name").value,
-          output_dir: configPathValue("outputDir"),
-          output_format: $("format").value,
-          sort_by: $("sortBy").value,
-          video_codec: $("codec").value,
-          gpu: $("gpu").value,
-          gpu_workers: Number($("gpuWorkers").value),
-          audio_codec: $("audioCodec").value,
-          quality_profile: $("qualityProfile").value,
-          crf: Number($("crf").value),
-          preset: $("preset").value,
-          fps_policy: $("fpsPolicy").value,
-          resolution_policy: $("resolutionPolicy").value,
-          pad_color: $("padColor").value,
-          ffmpeg_path: configPathValue("ffmpegPath"),
-          ffprobe_path: configPathValue("ffprobePath"),
-          temp_dir: configPathValue("tempDir"),
-          selected_files: files.map(file => file.path),
-          rotation_overrides: rotationPayload(),
-          recursive: $("recursive").checked,
-          overwrite: $("overwrite").checked,
-          dry_run: $("dryRun").checked,
-          keep_temp: $("keepTemp").checked,
-          auto_download_deps: $("autoDownloadDeps").checked
-        });
-        setRunning(true);
-        state.mergeWasRunning = true;
-        state.logCursor = 0;
-        state.runLogs = [];
-        $("logs").textContent = "";
-        if (state.statusTimer) clearInterval(state.statusTimer);
-        state.statusTimer = setInterval(async () => {
-          const status = await api(`/status?after=${state.logCursor}`);
-          appendLogLines(status.logs || []);
-          state.runLogs.push(...(status.logs || []));
-          state.logCursor = status.log_cursor || state.logCursor;
-          progress(status.progress);
-          setRunning(status.running);
-          if (!status.running) {
-            clearInterval(state.statusTimer);
-            state.statusTimer = null;
-            if (state.mergeWasRunning) {
-              state.mergeWasRunning = false;
-              notifyMergeFinished(state.runLogs);
-            }
-          }
-        }, 500);
-      } catch (error) {
-        progress(0);
-        setRunning(false);
-        log(`ERROR: ${error.message}`);
-      }
-    }
-    async function notifyMergeFinished(logs) {
-      if (!$("notifyOnComplete").checked) return;
-      const text = logs.join("\n");
-      let title = t("mergeCompletedTitle");
-      let body = t("mergeCompletedBody");
-      let kind = "success";
-      if (text.includes("Merge stopped by user.")) {
-        title = t("mergeStoppedTitle");
-        body = t("mergeStoppedBody");
-        kind = "error";
-      } else if (text.includes("ERROR:") || text.includes("Merge failed")) {
-        title = t("mergeFailedTitle");
-        body = t("mergeFailedBody");
-        kind = "error";
-      }
-      try {
-        const result = await api("/notify", {
-          title,
-          body,
-          sound: $("playSoundOnComplete").checked,
-          kind
-        });
-        if (!result.ok) showToast(title, body, kind);
-      } catch (error) {
-        log(`ERROR: ${error.message}`);
-        showToast(title, body, kind);
-        if ($("playSoundOnComplete").checked) playNoticeSound(kind);
-      }
-    }
-    function showToast(title, body, kind) {
-      const toast = $("toast");
-      $("toastTitle").textContent = title;
-      $("toastBody").textContent = body;
-      toast.classList.toggle("error", kind === "error");
-      toast.style.display = "block";
-      if (toast._timer) clearTimeout(toast._timer);
-      toast._timer = setTimeout(() => { toast.style.display = "none"; }, 7000);
-    }
-    function playNoticeSound(kind) {
-      try {
-        const AudioContext = window.AudioContext || window.webkitAudioContext;
-        if (!AudioContext) return;
-        const context = new AudioContext();
-        const oscillator = context.createOscillator();
-        const gain = context.createGain();
-        oscillator.type = "sine";
-        oscillator.frequency.value = kind === "error" ? 220 : 440;
-        gain.gain.setValueAtTime(0.0001, context.currentTime);
-        gain.gain.exponentialRampToValueAtTime(0.16, context.currentTime + 0.02);
-        gain.gain.exponentialRampToValueAtTime(0.0001, context.currentTime + 0.45);
-        oscillator.connect(gain);
-        gain.connect(context.destination);
-        oscillator.start();
-        oscillator.stop(context.currentTime + 0.5);
-      } catch (error) {
-        log(`ERROR: ${error.message}`);
-      }
-    }
-    async function cancelMerge() {
-      try {
-        log(t("stoppingMerge"));
-        await api("/cancel", {});
-      } catch (error) {
-        log(`ERROR: ${error.message}`);
-      }
-    }
-    document.querySelectorAll(".mode-card").forEach(card => card.addEventListener("click", () => {
-      state.mode = card.dataset.mode;
-      renderModes();
-      scheduleSaveConfig();
-      refreshPlan();
-    }));
-    $("selectSource").addEventListener("click", () => selectFolder("source"));
-    $("selectFiles").addEventListener("click", selectVideoFiles);
-    $("selectOutput").addEventListener("click", () => selectFolder("output"));
-    $("selectTemp").addEventListener("click", () => selectFolder("temp"));
-    $("selectAllFiles").addEventListener("click", selectAllFiles);
-    $("clearFileSelection").addEventListener("click", clearFileSelection);
-    $("refresh").addEventListener("click", scan);
-    $("startMerge").addEventListener("click", merge);
-    $("githubLink").addEventListener("click", async () => {
-      try { await api("/open-url", { url: "__REPOSITORY_URL__" }); } catch (error) { log(`ERROR: ${error.message}`); }
-    });
-    $("languageSelect").addEventListener("change", () => {
-      state.lang = $("languageSelect").value;
-      applyLanguage();
-      if (state.files.length) renderFiles(state.files);
-      scheduleSaveConfig();
-    });
-    const qualityDefaults = {
-      balanced: { crf: 23, preset: "medium" },
-      high: { crf: 20, preset: "slow" },
-      small: { crf: 25, preset: "medium" }
-    };
-    $("qualityProfile").addEventListener("change", () => {
-      const defaults = qualityDefaults[$("qualityProfile").value] || qualityDefaults.balanced;
-      $("crf").value = defaults.crf;
-      $("preset").value = defaults.preset;
-      scheduleSaveConfig();
-    });
-    ["format", "sortBy", "codec", "gpu", "gpuWorkers", "audioCodec", "qualityProfile", "crf", "preset", "fpsPolicy", "resolutionPolicy", "padColor", "outputDir", "tempDir", "ffmpegPath", "ffprobePath", "recursive", "overwrite", "dryRun", "keepTemp", "autoDownloadDeps", "notifyOnComplete", "playSoundOnComplete"].forEach(id => {
-      const node = $(id);
-      if (pathFields.includes(id)) {
-        node.addEventListener("input", () => {
-          node.dataset.custom = node.value.trim() ? "true" : "false";
-          if (node.dataset.custom !== "true") refreshDefaultPaths();
-        });
-      }
-      node.addEventListener(node.type === "checkbox" ? "change" : "input", scheduleSaveConfig);
-      node.addEventListener("change", scheduleSaveConfig);
-      if (["format", "codec", "audioCodec", "fpsPolicy", "resolutionPolicy"].includes(id)) {
-        node.addEventListener("change", refreshPlan);
-      }
-    });
-    $("ffmpegStatus").addEventListener("click", checkDeps);
-    $("notifyOnComplete").addEventListener("change", async () => {
-      if ($("notifyOnComplete").checked) {
-        try { await api("/notify-permission", {}); } catch (error) {}
-      }
-    });
-    document.querySelectorAll(".info").forEach(icon => {
-      icon.addEventListener("mouseenter", () => {
-        const tip = $("tooltip");
-        tip.textContent = icon.dataset.tip || "";
-        tip.style.display = "block";
-        const rect = icon.getBoundingClientRect();
-        const width = Math.min(300, Math.max(220, tip.offsetWidth || 260));
-        let left = rect.right + 10;
-        if (left + width > window.innerWidth - 12) left = rect.left - width - 10;
-        if (left < 12) left = 12;
-        let top = rect.top - 8;
-        const height = tip.offsetHeight || 48;
-        if (top + height > window.innerHeight - 12) top = window.innerHeight - height - 12;
-        if (top < 12) top = 12;
-        tip.style.left = `${left}px`;
-        tip.style.top = `${top}px`;
-      });
-      icon.addEventListener("mouseleave", () => {
-        $("tooltip").style.display = "none";
-      });
-    });
-    fitColumnsToContent();
-    installColumnResize();
-    (async () => {
-      await loadConfig();
-      await refreshDefaultPaths();
-      applyLanguage();
-      log(t("selectBegin"));
-      checkDeps();
-      if ($("notifyOnComplete").checked) {
-        try { await api("/notify-permission", {}); } catch (error) {}
-      }
-    })();
-  </script>
-</body>
-</html>
-"""
-
-
 class GuiState:
     def __init__(self) -> None:
         self.logs: list[str] = []
@@ -1843,12 +102,14 @@ class GuiState:
         self.cleanup_temp_on_cancel = True
         self.temp_paths: list[Path] = []
         self.media_files: list[VideoFile] = []
+        self.result: dict[str, object] | None = None
+        self.log_path: Path | None = None
         self.lock = threading.Lock()
 
     def log(self, message: str) -> None:
         stamp = time.strftime("%H:%M:%S")
         with self.lock:
-            self.logs.append(f"[{stamp}] {message}")
+            self.logs.extend(f"[{stamp}] {line}" for line in message.splitlines() or [""])
 
     def set_progress(self, value: int) -> None:
         with self.lock:
@@ -1862,6 +123,7 @@ class GuiState:
                 "log_cursor": len(self.logs),
                 "progress": self.progress,
                 "running": self.running,
+                "result": self.result,
             }
 
     def set_media_files(self, files: list[VideoFile]) -> None:
@@ -1877,6 +139,7 @@ class GuiState:
             if self.running:
                 return False
             self.logs.clear()
+            self.result = None
             self.progress = 4
             self.running = True
             self.cancel_requested = False
@@ -1932,6 +195,8 @@ class QueueLogHandler(logging.Handler):
 
 
 def launch_gui(host: str = "127.0.0.1", port: int | None = None) -> None:
+    if not (Path(__file__).parent / "web" / "index.html").is_file():
+        raise RuntimeError("Desktop UI is not built. Run `npm --prefix frontend ci` and `npm --prefix frontend run build`.")
     port = port or _free_port()
     state = GuiState()
     api_token = secrets.token_urlsafe(32)
@@ -1969,7 +234,24 @@ def _make_handler(state: GuiState, api_token: str):
         def do_GET(self) -> None:
             parsed = urlparse(self.path)
             if parsed.path == "/":
-                self._send_html(HTML)
+                index = Path(__file__).parent / "web" / "index.html"
+                if index.is_file():
+                    self._send_html(index.read_text(encoding="utf-8"))
+                else:
+                    self._send_html("<h1>Build the desktop UI first</h1><p>Run npm ci and npm run build in frontend/.</p>")
+                return
+            if parsed.path.startswith("/assets/"):
+                root = (Path(__file__).parent / "web" / "assets").resolve()
+                asset = (root / parsed.path.removeprefix("/assets/")).resolve()
+                if root not in asset.parents or not asset.is_file():
+                    self.send_error(HTTPStatus.NOT_FOUND)
+                    return
+                data = asset.read_bytes()
+                self.send_response(HTTPStatus.OK)
+                self.send_header("Content-Type", mimetypes.guess_type(asset.name)[0] or "application/octet-stream")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
                 return
             if not self._authorized():
                 return
@@ -1998,6 +280,13 @@ def _make_handler(state: GuiState, api_token: str):
                 except ValueError:
                     after = 0
                 self._send_json(state.snapshot(after))
+                return
+            if parsed.path == "/logs":
+                if state.log_path and state.log_path.is_file():
+                    lines = state.log_path.read_text(encoding="utf-8", errors="replace").splitlines()
+                else:
+                    lines = state.snapshot()["logs"]
+                self._send_json({"logs": lines})
                 return
             if parsed.path == "/config":
                 self._send_json(_load_gui_config())
@@ -2140,6 +429,7 @@ def _make_handler(state: GuiState, api_token: str):
                     state.log(f"{len(failures)} file(s) could not be analyzed.")
                 state.set_media_files(media_files)
                 plan = _build_gui_plan(media_files, media_files, payload)
+                plan["failures"] = [{"path": str(path), "stage": "probe", "reason": reason} for path, reason in failures.items()]
                 state.set_progress(100)
                 self._send_json(plan)
             except Exception as exc:
@@ -2170,7 +460,16 @@ def _make_handler(state: GuiState, api_token: str):
             if not state.begin_run(cleanup_temp_on_cancel=not bool(payload.get("keep_temp"))):
                 self._send_json({"error": "A merge is already running."}, HTTPStatus.CONFLICT)
                 return
-            command = _build_merge_command(payload)
+            try:
+                run_dir = _config_dir() / "runs" / secrets.token_hex(8)
+                run_dir.mkdir(parents=True, exist_ok=True)
+                state.log_path = run_dir / "process.log"
+                payload = {**payload, "report_file": str(run_dir / "result.json"), "log_file": str(state.log_path)}
+                command = _build_merge_command(payload)
+            except Exception as exc:
+                state.finish_process()
+                self._send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+                return
             threading.Thread(target=_run_merge, args=(command, state), daemon=True).start()
             self._send_json({"command": command})
 
@@ -2601,6 +900,11 @@ def _build_merge_command(payload: dict[str, object]) -> list[str]:
         cmd = [sys.executable, str(main_py), "merge", str(payload["input_dir"])]
     cmd.extend(["--mode", str(payload.get("mode") or MergeMode.optimal.value)])
     cmd.extend(["--output-format", str(payload.get("output_format") or "mp4")])
+    cmd.extend(["--check-level", str(payload.get("check_level") or "quick")])
+    cmd.extend(["--on-error", str(payload.get("on_error") or "stop")])
+    for key, flag in (("report_file", "--report-file"), ("log_file", "--log-file")):
+        if payload.get(key):
+            cmd.extend([flag, str(payload[key])])
     if payload.get("name"):
         cmd.extend(["--name", str(payload["name"])])
     if payload.get("output_dir"):
@@ -2617,7 +921,7 @@ def _build_merge_command(payload: dict[str, object]) -> list[str]:
         cmd.extend(["--audio-codec", str(payload["audio_codec"])])
     if payload.get("quality_profile"):
         cmd.extend(["--quality-profile", str(payload["quality_profile"])])
-    cmd.extend(["--crf", str(payload.get("crf") or 23)])
+    cmd.extend(["--crf", str(payload.get("crf", 23))])
     if payload.get("preset"):
         cmd.extend(["--preset", str(payload["preset"])])
     if payload.get("fps_policy"):
@@ -2677,7 +981,8 @@ def _write_selected_file_list(payload: dict[str, object]) -> Path | None:
 
 
 def _run_merge(command: list[str], state: GuiState) -> None:
-    state.log("Command: " + " ".join(command))
+    state.log("Starting merge task.")
+    process = None
     try:
         process = subprocess.Popen(
             command,
@@ -2693,9 +998,27 @@ def _run_merge(command: list[str], state: GuiState) -> None:
         assert process.stdout is not None
         for line in process.stdout:
             stripped = line.rstrip()
+            if "TASK_EVENT:" in stripped:
+                try:
+                    event = json.loads(stripped.split("TASK_EVENT:", 1)[1])
+                    with state.lock:
+                        if event.pop("incremental", False):
+                            previous = state.result or {"checks": [], "skipped": [], "outputs": []}
+                            for field in ("checks", "skipped"):
+                                by_path = {item["path"]: item for item in previous.get(field, [])}
+                                by_path.update({item["path"]: item for item in event.get(field, [])})
+                                event[field] = list(by_path.values())
+                            event["outputs"] = previous.get("outputs", [])
+                        state.result = event
+                except (ValueError, TypeError):
+                    pass
+                continue
             temp_match = re.search(r"(?:Preprocessing|Concat) temp directory:\s+(.+)$", stripped)
             if temp_match:
                 state.record_temp_path(Path(temp_match.group(1).strip()))
+            staging_match = re.search(r"Staging output:\s+(.+)$", stripped)
+            if staging_match:
+                state.record_temp_path(Path(staging_match.group(1).strip()))
             progress_match = re.search(r"Progress:\s+(\d+)/(\d+)\s+\((\d+)%\)", stripped)
             if progress_match:
                 state.set_progress(int(progress_match.group(3)))
@@ -2704,18 +1027,34 @@ def _run_merge(command: list[str], state: GuiState) -> None:
         code = process.wait()
         was_cancelled = state.finish_process()
         if was_cancelled:
+            with state.lock:
+                state.result = {"checks": [], "skipped": [], "outputs": [], "error": "", **(state.result or {}), "status": "cancelled"}
             state.log("Merge stopped by user.")
             _cleanup_cancel_temp_dirs(state)
         elif code == 0:
             state.set_progress(100)
-            state.log("Merge completed.")
+            state.log("Merge partially completed; review skipped inputs." if state.result and state.result.get("status") == "partial" else "Merge completed.")
         else:
             state.log(f"ERROR: Merge failed with exit code {code}.")
+            with state.lock:
+                state.result = {"checks": [], "skipped": [], "outputs": [], "error": "", **(state.result or {}), "status": "failed"}
     except Exception as exc:
+        if process is not None and process.poll() is None:
+            _terminate_process(process)
         state.log(f"ERROR: {exc}")
+        with state.lock:
+            state.result = {"status": "failed", "error": str(exc), "checks": [], "skipped": [], "outputs": []}
     finally:
+        if process is not None and process.stdout is not None and hasattr(process.stdout, "close"):
+            process.stdout.close()
         _cleanup_selected_file_list(command)
         state.finish_process()
+        if state.result and "--report-file" in command:
+            try:
+                report = Path(command[command.index("--report-file") + 1])
+                report.write_text(json.dumps(state.result, ensure_ascii=False, indent=2), encoding="utf-8")
+            except OSError as exc:
+                state.log(f"WARNING: Could not save task report: {exc}")
 
 
 def _is_useful_process_log(message: str) -> bool:
@@ -2724,6 +1063,8 @@ def _is_useful_process_log(message: str) -> bool:
     if re.search(r"Progress:\s+\d+/\d+\s+\(\d+%\)", message):
         return False
     if re.search(r"(?:Preprocessing|Concat) temp directory:\s+", message):
+        return False
+    if "Staging output:" in message or message.startswith("Command:"):
         return False
     return True
 
@@ -2743,6 +1084,12 @@ def _cleanup_selected_file_list(command: list[str]) -> None:
 def _cleanup_cancel_temp_dirs(state: GuiState) -> None:
     cleaned = 0
     for path in state.consume_cancel_cleanup_paths():
+        if re.fullmatch(r"\..+\.[0-9a-f]{32}\.partial\.[a-z0-9]+", path.name):
+            try:
+                path.unlink(missing_ok=True)
+            except OSError as exc:
+                state.log(f"WARNING: Staging cleanup failed: {path} | {exc}")
+            continue
         if not path.name.startswith(("videomerge_preprocess_", "videomerge_concat_")):
             state.log(f"Skipped unsafe temp cleanup path: {path}")
             continue
