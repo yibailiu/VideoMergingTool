@@ -6,6 +6,12 @@ $ErrorActionPreference = "Stop"
 
 $ProjectRoot = Resolve-Path "$PSScriptRoot\.."
 Set-Location $ProjectRoot
+if ($env:VMT_FRONTEND_PREBUILT -ne "1") {
+    & npm --prefix frontend ci --no-audit --no-fund
+    if ($LASTEXITCODE -ne 0) { throw "Frontend dependency installation failed" }
+    & npm --prefix frontend run build
+    if ($LASTEXITCODE -ne 0) { throw "Frontend build failed" }
+}
 $IconPath = Join-Path $ProjectRoot "assets\icons\VideoMergingTool.ico"
 $VendorFfmpegDir = Join-Path $ProjectRoot "build\vendor\ffmpeg"
 
@@ -15,6 +21,9 @@ if (-not (Test-Path ".venv")) {
 
 & ".\.venv\Scripts\python.exe" -m pip install --upgrade pip
 & ".\.venv\Scripts\python.exe" -m pip install -r requirements-build.txt
+if ($LASTEXITCODE -ne 0) { throw "Build dependency installation failed" }
+& ".\.venv\Scripts\python.exe" scripts/verify_bundle.py videomerge/web --web-only
+if ($LASTEXITCODE -ne 0) { throw "Frontend assets are incomplete" }
 $Version = (& ".\.venv\Scripts\python.exe" -c "from videomerge import __version__; print(__version__)").Trim()
 $VersionFile = Join-Path $ProjectRoot "build\version_info.txt"
 
@@ -35,7 +44,9 @@ function Invoke-WindowsSigning {
     $CertPath = Join-Path ([System.IO.Path]::GetTempPath()) "videomergingtool-signing.pfx"
     [System.IO.File]::WriteAllBytes($CertPath, [Convert]::FromBase64String($env:WINDOWS_CERTIFICATE_BASE64))
     & $SignTool.Source sign /fd SHA256 /td SHA256 /tr "http://timestamp.digicert.com" /f $CertPath /p $env:WINDOWS_CERTIFICATE_PASSWORD $Path
+    $SigningExitCode = $LASTEXITCODE
     Remove-Item -Force $CertPath
+    if ($SigningExitCode -ne 0) { throw "Windows signing failed" }
 }
 
 if (Test-Path "build") {
@@ -43,6 +54,7 @@ if (Test-Path "build") {
 }
 
 & ".\.venv\Scripts\python.exe" "scripts\prepare_ffmpeg.py" --output $VendorFfmpegDir --force
+if ($LASTEXITCODE -ne 0) { throw "FFmpeg preparation failed" }
 & ".\.venv\Scripts\python.exe" "scripts\write_windows_version.py" $VersionFile
 
 & ".\.venv\Scripts\pyinstaller.exe" `
@@ -60,7 +72,9 @@ if (Test-Path "build") {
     --collect-all certifi `
     --hidden-import videomerge.gui `
     --hidden-import tkinter `
+    --add-data "$ProjectRoot\videomerge\web;videomerge/web" `
     main.py
+if ($LASTEXITCODE -ne 0) { throw "Application packaging failed" }
 
 Write-Host ""
 Write-Host "Build complete: $ProjectRoot\dist\$Name.exe"
@@ -102,6 +116,7 @@ Name: "{userdesktop}\$Name"; Filename: "{app}\$Name.exe"; Tasks: desktopicon
 Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Additional icons:"
 "@ | Set-Content -Path $IssPath -Encoding UTF8
     & $Inno.Source $IssPath
+    if ($LASTEXITCODE -ne 0) { throw "Installer generation failed" }
     Invoke-WindowsSigning -Path (Join-Path $InstallerDir "$Name-Setup.exe")
     Write-Host "Installer complete: $InstallerDir\$Name-Setup.exe"
 } else {

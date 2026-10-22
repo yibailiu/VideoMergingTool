@@ -9,15 +9,31 @@ VENDOR_FFMPEG_DIR="$PROJECT_ROOT/build/vendor/ffmpeg"
 MACOS_CODESIGN_IDENTITY="${MACOS_CODESIGN_IDENTITY:--}"
 cd "$PROJECT_ROOT"
 
-python3 -m venv .venv
-./.venv/bin/python -m pip install --upgrade pip
-./.venv/bin/python -m pip install -r requirements-build.txt
-VERSION="$(./.venv/bin/python -c 'from videomerge import __version__; print(__version__)')"
+if [[ "${VMT_FRONTEND_PREBUILT:-0}" != "1" ]]; then
+  npm --prefix frontend ci --no-audit --no-fund
+  npm --prefix frontend run build
+fi
+
+PYTHON="${VMT_PYTHON_BINARY:-python3}"
+MACOS_TARGET_ARCH="${MACOS_TARGET_ARCH:-universal2}"
+if [[ "$(uname -s)" == "Darwin" && "$MACOS_TARGET_ARCH" == "universal2" ]]; then
+  lipo -verify_arch x86_64 arm64 "$("$PYTHON" -c 'import sys; print(sys.executable)')"
+fi
+"$PYTHON" -m venv .venv-build
+BUILD_PYTHON="$PROJECT_ROOT/.venv-build/bin/python"
+"$BUILD_PYTHON" -m pip install --upgrade pip
+"$BUILD_PYTHON" -m pip install -r requirements-build.txt
+"$BUILD_PYTHON" scripts/verify_bundle.py videomerge/web --web-only
+VERSION="$("$BUILD_PYTHON" -c 'from videomerge import __version__; print(__version__)')"
 BUNDLE_VERSION="${VERSION%%-*}"
 
 rm -rf build
 
-./.venv/bin/python scripts/prepare_ffmpeg.py --output "$VENDOR_FFMPEG_DIR" --force
+FFMPEG_ARGS=()
+if [[ "$(uname -s)" == "Darwin" ]]; then
+  FFMPEG_ARGS+=(--architecture "$MACOS_TARGET_ARCH")
+fi
+"$BUILD_PYTHON" scripts/prepare_ffmpeg.py --output "$VENDOR_FFMPEG_DIR" --force "${FFMPEG_ARGS[@]}"
 
 PYINSTALLER_ARGS=(
   --clean
@@ -30,11 +46,14 @@ PYINSTALLER_ARGS=(
   --collect-all certifi
   --hidden-import videomerge.gui
   --hidden-import tkinter
+  --add-data "$PROJECT_ROOT/videomerge/web:videomerge/web"
 )
 
 if [[ "$(uname -s)" == "Darwin" ]]; then
   PYINSTALLER_ARGS+=(
     --windowed
+    --target-arch "$MACOS_TARGET_ARCH"
+    --codesign-identity "$MACOS_CODESIGN_IDENTITY"
     --icon "$ICON_ICNS"
     --osx-bundle-identifier "com.yibailiu.VideoMergingTool"
     --hidden-import Foundation
@@ -53,7 +72,7 @@ else
   )
 fi
 
-./.venv/bin/pyinstaller "${PYINSTALLER_ARGS[@]}" main.py
+./.venv-build/bin/pyinstaller "${PYINSTALLER_ARGS[@]}" main.py
 
 echo
 if [[ "$(uname -s)" == "Darwin" && -d "$PROJECT_ROOT/dist/$NAME.app" ]]; then
@@ -69,6 +88,11 @@ if [[ "$(uname -s)" == "Darwin" && -d "$PROJECT_ROOT/dist/$NAME.app" ]]; then
     CODESIGN_ARGS+=(--options runtime --timestamp)
   fi
   codesign "${CODESIGN_ARGS[@]}" "$PROJECT_ROOT/dist/$NAME.app"
+  VERIFY_ARGS=()
+  if [[ "$MACOS_TARGET_ARCH" == "universal2" ]]; then
+    VERIFY_ARGS+=(--universal)
+  fi
+  "$BUILD_PYTHON" scripts/verify_bundle.py "$PROJECT_ROOT/dist/$NAME.app" "${VERIFY_ARGS[@]}"
   touch "$PROJECT_ROOT/dist/$NAME.app"
   rm -f "$DMG_PATH"
   rm -rf "$DMG_ROOT"
