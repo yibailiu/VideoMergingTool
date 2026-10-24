@@ -108,6 +108,9 @@ const sorts = [
       </div>
       <div class="settings-section">
         <h3>{{ t("输出", "Output") }}</h3>
+        <el-checkbox v-model="settings.recursive">{{
+          t("递归扫描子目录", "Scan subfolders")
+        }}</el-checkbox>
         <el-form-item :label="t('文件名前缀', 'Filename prefix')"
           ><el-input v-model="settings.name" placeholder="Merged_Output"
         /></el-form-item>
@@ -279,10 +282,7 @@ const sorts = [
               :placeholder="t('自动检测', 'Automatic')"
           /></el-form-item>
           <div class="switch-list">
-            <el-checkbox v-model="settings.recursive">{{
-              t("递归扫描子目录", "Scan subfolders")
-            }}</el-checkbox
-            ><el-checkbox v-model="settings.overwrite">{{
+            <el-checkbox v-model="settings.overwrite">{{
               t("允许覆盖输出", "Overwrite outputs")
             }}</el-checkbox
             ><el-checkbox v-model="settings.keepTemp">{{

@@ -126,6 +126,19 @@ class GuiState:
                 "result": self.result,
             }
 
+    def full_log_text(self) -> str:
+        with self.lock:
+            console = "\n".join(self.logs)
+            path = self.log_path
+        if path and path.is_file():
+            try:
+                raw = path.read_text(encoding="utf-8", errors="replace")
+            except OSError as exc:
+                return console + f"\n[Log file could not be read: {exc}]"
+            if raw:
+                return console + "\n\n--- Complete process log ---\n" + raw
+        return console
+
     def set_media_files(self, files: list[VideoFile]) -> None:
         with self.lock:
             self.media_files = list(files)
@@ -139,6 +152,7 @@ class GuiState:
             if self.running:
                 return False
             self.logs.clear()
+            self.log_path = None
             self.result = None
             self.progress = 4
             self.running = True
@@ -222,8 +236,31 @@ def _open_desktop_window(url: str) -> None:
             "Desktop GUI requires pywebview. Install dependencies with `pip install -r requirements.txt`."
         ) from exc
 
-    webview.create_window(f"VideoMergingTool {__version__}", url, width=1280, height=820, min_size=(900, 620))
+    webview.create_window(f"VideoMergingTool {__version__}", url, width=1280, height=820, min_size=(900, 620), text_select=True)
     webview.start()
+
+
+def _copy_text_to_clipboard(text: str) -> None:
+    if not text:
+        raise ValueError("No log messages are available yet.")
+    system = platform.system()
+    if system == "Windows":
+        script = ("[Console]::InputEncoding = New-Object System.Text.UTF8Encoding($false); "
+                  "Add-Type -AssemblyName System.Windows.Forms; "
+                  "[System.Windows.Forms.Clipboard]::SetText([Console]::In.ReadToEnd())")
+        command = ["powershell.exe", "-NoProfile", "-NonInteractive", "-STA", "-Command", script]
+    elif system == "Darwin":
+        command = ["pbcopy"]
+    elif os.environ.get("WAYLAND_DISPLAY") and shutil.which("wl-copy"):
+        command = ["wl-copy"]
+    elif shutil.which("xclip"):
+        command = ["xclip", "-selection", "clipboard"]
+    elif shutil.which("xsel"):
+        command = ["xsel", "--clipboard", "--input"]
+    else:
+        raise RuntimeError("No system clipboard utility is available. Copy from the full log view instead.")
+    subprocess.run(command, input=text, encoding="utf-8", capture_output=True,
+                   check=True, timeout=10, **subprocess_window_kwargs())
 
 
 def _make_handler(state: GuiState, api_token: str):
@@ -282,11 +319,8 @@ def _make_handler(state: GuiState, api_token: str):
                 self._send_json(state.snapshot(after))
                 return
             if parsed.path == "/logs":
-                if state.log_path and state.log_path.is_file():
-                    lines = state.log_path.read_text(encoding="utf-8", errors="replace").splitlines()
-                else:
-                    lines = state.snapshot()["logs"]
-                self._send_json({"logs": lines})
+                text = state.full_log_text()
+                self._send_json({"logs": text.splitlines(), "text": text})
                 return
             if parsed.path == "/config":
                 self._send_json(_load_gui_config())
@@ -301,6 +335,14 @@ def _make_handler(state: GuiState, api_token: str):
             if not self._authorized():
                 return
             payload = self._read_json()
+            if parsed.path == "/copy-logs":
+                text = state.full_log_text()
+                try:
+                    _copy_text_to_clipboard(text)
+                    self._send_json({"copied": True})
+                except Exception as exc:
+                    self._send_json({"copied": False, "text": text, "message": str(exc)})
+                return
             if parsed.path == "/scan":
                 self._scan(payload)
                 return
@@ -402,7 +444,7 @@ def _make_handler(state: GuiState, api_token: str):
                 logger = _gui_logger(state)
                 state.set_progress(8)
                 tools = resolve_tools(logger, True, default_tools_dir())
-                input_dir = Path(str(payload["input_dir"]))
+                input_dir = Path(str(payload["input_dir"])).expanduser().resolve()
                 if not input_dir.is_dir():
                     raise ValueError(f"Selected path is not a folder: {input_dir}")
                 output_value = str(payload.get("output_dir") or "").strip()
