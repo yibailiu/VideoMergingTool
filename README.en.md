@@ -20,7 +20,7 @@
 
 VideoMergingTool helps you combine video clips into longer videos without uploading your files anywhere. It is designed for everyday desktop use: install the app, choose a folder or specific video files, review the detected videos, pick a merge mode, and start.
 
-Current development version: `6.0.0` (fixes under validation; version unchanged). See the [6.0.0 notes (Chinese)](docs/releases/v6.0.0.md). Published installer availability is shown on the [Releases page](https://github.com/yibailiu/VideoMergingTool/releases).
+Current version: `6.0.0`. See the [6.0.0 notes (Chinese)](docs/releases/v6.0.0.md). Published installer availability is shown on the [Releases page](https://github.com/yibailiu/VideoMergingTool/releases).
 
 Version 6 rebuilds the desktop UI with Vue 3, Element Plus, and AG Grid Community. It adds sampled/full input checks and an explicit stop-or-skip policy for damaged videos. See [6.0.0 notes](docs/6.0.0.md) for architecture and development details.
 

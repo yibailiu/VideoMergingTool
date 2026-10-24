@@ -20,7 +20,7 @@
 
 VideoMergingTool 用来把一个文件夹里的多个视频批量合并成更长的视频。它面向普通桌面用户设计：安装应用，选择视频文件夹，确认识别结果，选择合并模式，然后开始合并。
 
-当前开发版本为 `6.0.0`（修复验证中，版本号不变），使用 Vue 3、Element Plus 和 AG Grid Community 重构界面，支持直接选择文件、视频抽检和损坏时跳过继续。最新完整说明见 [中文首页](README.md)、[6.0.0 说明](docs/releases/v6.0.0.md) 和 [架构说明](docs/6.0.0.md)。
+当前版本为 `6.0.0`，使用 Vue 3、Element Plus 和 AG Grid Community 重构界面，支持直接选择文件、视频抽检和损坏时跳过继续。最新完整说明见 [中文首页](README.md)、[6.0.0 说明](docs/releases/v6.0.0.md) 和 [架构说明](docs/6.0.0.md)。
 
 Windows 和 macOS 安装包已经内置 FFmpeg / FFprobe，普通用户不需要手动安装 FFmpeg，也不需要配置环境变量。
 

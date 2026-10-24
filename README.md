@@ -20,7 +20,7 @@
 
 VideoMergingTool 用来把多个视频批量合并成更长的视频。它面向普通桌面用户设计：安装应用，选择视频文件夹或直接选择若干视频，确认识别结果，选择合并模式，然后开始合并。
 
-当前开发版本：`6.0.0`（修复验证中，版本号不变）。更新内容见 [6.0.0 说明](docs/releases/v6.0.0.md)，安装包发布状态以 [Releases 页面](https://github.com/yibailiu/VideoMergingTool/releases) 为准。
+当前版本：`6.0.0`。更新内容见 [6.0.0 说明](docs/releases/v6.0.0.md)，安装包发布状态以 [Releases 页面](https://github.com/yibailiu/VideoMergingTool/releases) 为准。
 
 6.0.0 使用 Vue 3、Element Plus 与 AG Grid Community 重构桌面界面，并增加视频快速抽检、完整解码检查，以及“损坏时停止／跳过继续”的任务策略。详细行为和开发说明见 [6.0.0 说明](docs/6.0.0.md)。
 
