@@ -9,7 +9,9 @@ import ssl
 import stat
 import sys
 import tarfile
+import tempfile
 import time
+import urllib.error
 import urllib.request
 import zipfile
 from pathlib import Path
@@ -20,7 +22,9 @@ from .models import ToolPaths
 
 DOWNLOADS = {
     "Windows": {
-        "url": "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip",
+        "url": "https://www.gyan.dev/ffmpeg/builds/packages/ffmpeg-9.0.2-essentials_build.zip",
+        "fallback_urls": ("https://github.com/GyanD/codexffmpeg/releases/download/9.0.2/ffmpeg-9.0.2-essentials_build.zip",),
+        "sha256": "60f467265b1e312373dbcd92200c2618a74850f98d3d078e94296bb3fa2047ba",
         "checksum_env": "VIDEOMERGE_FFMPEG_WINDOWS_SHA256",
         "ffmpeg_member": "ffmpeg.exe",
         "ffprobe_member": "ffprobe.exe",
@@ -114,7 +118,8 @@ def download_ffmpeg_tools(tools_dir: Path, logger: logging.Logger, architecture:
 
     tools_dir.mkdir(parents=True, exist_ok=True)
     archive_path = tools_dir / f"ffmpeg_download{_archive_suffix(config['url'])}"
-    _download(config["url"], archive_path, logger, config.get("checksum_env"), config.get("sha256"))
+    _download(config["url"], archive_path, logger, config.get("checksum_env"), config.get("sha256"),
+              config.get("fallback_urls", ()))
     ffmpeg = _extract_member(archive_path, config["ffmpeg_member"], tools_dir, logger)
 
     if system == "Darwin" and "ffprobe_url" in config:
@@ -194,12 +199,35 @@ def _system_binary_candidates(name: str) -> list[Path]:
     ]
 
 
-def _download(url: str, output: Path, logger: logging.Logger, checksum_env: str | None = None, expected_sha256: str | None = None) -> None:
-    logger.info("Downloading %s", url)
+def _download(url: str, output: Path, logger: logging.Logger, checksum_env: str | None = None,
+              expected_sha256: str | None = None, fallback_urls: tuple[str, ...] = ()) -> None:
+    # Alternate endpoints are only safe when their bytes share a mandatory hash.
+    if fallback_urls and not expected_sha256:
+        raise DependencyError("Fallback downloads require a pinned SHA-256 checksum.")
     partial = output.with_name(output.name + ".part")
+    cache = None
+    cache_root = os.environ.get("VIDEOMERGE_DOWNLOAD_CACHE", "").strip()
+    if cache_root:
+        checksum = expected_sha256 or os.environ.get(checksum_env or "", "")
+        key = hashlib.sha256(f"{url}|{checksum}".encode()).hexdigest()
+        cache = Path(cache_root) / (key + _archive_suffix(url))
+        if cache.is_file():
+            try:
+                _verify_download_checksum(cache, checksum_env, logger, expected_sha256)
+                _validate_download_archive(cache, output.name)
+                shutil.copyfile(cache, partial)
+                partial.replace(output)
+                logger.info("Using validated dependency cache: %s", cache.name)
+                return
+            except (OSError, DependencyError, ValueError, tarfile.TarError, zipfile.BadZipFile) as exc:
+                partial.unlink(missing_ok=True)
+                logger.warning("Dependency cache unusable; downloading again: %s", exc)
+    logger.info("Downloading %s", url)
+    urls = (url, *fallback_urls)
     for attempt in range(3):
         try:
-            request = urllib.request.Request(url, headers={
+            endpoint = urls[min(attempt, len(urls) - 1)]
+            request = urllib.request.Request(endpoint, headers={
                 "User-Agent": "VideoMergingTool/6.0 dependency-installer", "Cache-Control": "no-cache",
             })
             with urllib.request.urlopen(request, context=_ssl_context(), timeout=60) as response:
@@ -216,13 +244,29 @@ def _download(url: str, output: Path, logger: logging.Logger, checksum_env: str 
             _verify_download_checksum(partial, checksum_env, logger, expected_sha256)
             _validate_download_archive(partial, output.name)
             partial.replace(output)
+            if cache is not None:
+                try:
+                    cache.parent.mkdir(parents=True, exist_ok=True)
+                    with tempfile.TemporaryDirectory(prefix="download_", dir=cache.parent) as directory:
+                        staged = Path(directory) / cache.name
+                        shutil.copyfile(output, staged)
+                        staged.replace(cache)
+                except OSError as exc:
+                    logger.warning("Could not save dependency cache: %s", exc)
             return
         except Exception as exc:
             partial.unlink(missing_ok=True)
             if attempt == 2:
                 raise DependencyError(f"Failed to download a valid archive from {url} after 3 attempts: {exc}") from exc
-            logger.warning("Download attempt %s/3 failed: %s; retrying.", attempt + 1, exc)
-            time.sleep(attempt + 1)
+            delay = (5, 15)[attempt]
+            if isinstance(exc, urllib.error.HTTPError) and exc.headers:
+                retry_after = exc.headers.get("Retry-After", "")
+                if retry_after.isdigit():
+                    delay = max(delay, min(60, int(retry_after)))
+            logger.warning("Download attempt %s/3 failed at %s: %s; retrying in %ss%s.",
+                           attempt + 1, endpoint, exc, delay,
+                           " using fallback source" if attempt + 1 < len(urls) else "")
+            time.sleep(delay)
 
 
 def _validate_download_archive(path: Path, filename: str) -> None:

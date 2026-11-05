@@ -15,6 +15,61 @@ from videomerge.errors import DependencyError
 
 
 class EnvCheckTests(unittest.TestCase):
+    def setUp(self):
+        environment = patch.dict("os.environ", {"VIDEOMERGE_DOWNLOAD_CACHE": ""})
+        environment.start()
+        self.addCleanup(environment.stop)
+
+    def test_503_uses_pinned_fallback_and_honors_retry_after(self):
+        data = self.archive()
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "ffmpeg.tar.xz"
+            error = urllib.error.HTTPError("https://primary.invalid", 503, "Unavailable", {"Retry-After": "30"}, None)
+            import hashlib
+            with patch("videomerge.env_check.urllib.request.urlopen", side_effect=[error, self.response(data)]) as fetch, \
+                    patch("videomerge.env_check.time.sleep") as sleep:
+                _download("https://primary.invalid/archive.tar.xz", output, logging.getLogger("test"),
+                          expected_sha256=hashlib.sha256(data).hexdigest(),
+                          fallback_urls=("https://backup.invalid/archive.tar.xz",))
+            self.assertEqual([call.args[0].full_url for call in fetch.call_args_list],
+                             ["https://primary.invalid/archive.tar.xz", "https://backup.invalid/archive.tar.xz"])
+            sleep.assert_called_once_with(30)
+            self.assertEqual(output.read_bytes(), data)
+
+    def test_fallback_requires_and_enforces_shared_hash(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "archive.tar.xz"
+            with self.assertRaisesRegex(DependencyError, "pinned"):
+                _download("https://primary.invalid", output, logging.getLogger("test"),
+                          fallback_urls=("https://backup.invalid",))
+            error = urllib.error.HTTPError("https://primary.invalid", 503, "Unavailable", {}, None)
+            with patch("videomerge.env_check.urllib.request.urlopen", side_effect=[error, self.response(self.archive()), self.response(self.archive())]), \
+                    patch("videomerge.env_check.time.sleep"):
+                with self.assertRaisesRegex(DependencyError, "Checksum mismatch"):
+                    _download("https://primary.invalid", output, logging.getLogger("test"),
+                              expected_sha256="0" * 64, fallback_urls=("https://backup.invalid",))
+            self.assertFalse(output.exists())
+
+    def test_cache_is_revalidated_and_corruption_triggers_download(self):
+        data = self.archive()
+        import hashlib
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            output = root / "archive.tar.xz"
+            with patch.dict("os.environ", {"VIDEOMERGE_DOWNLOAD_CACHE": str(root / "cache")}), \
+                    patch("videomerge.env_check.urllib.request.urlopen", side_effect=lambda *a, **k: self.response(data)) as fetch:
+                for _ in range(2):
+                    _download("https://example.invalid/archive.tar.xz", output, logging.getLogger("test"),
+                              expected_sha256=hashlib.sha256(data).hexdigest())
+                    self.assertEqual(output.read_bytes(), data)
+                    output.unlink()
+                self.assertEqual(fetch.call_count, 1)
+                next((root / "cache").iterdir()).write_bytes(b"damaged")
+                _download("https://example.invalid/archive.tar.xz", output, logging.getLogger("test"),
+                          expected_sha256=hashlib.sha256(data).hexdigest())
+                self.assertEqual(fetch.call_count, 2)
+                self.assertEqual(output.read_bytes(), data)
+
     @staticmethod
     def response(data: bytes, content_type="application/x-xz", length=None):
         response = io.BytesIO(data)
