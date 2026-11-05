@@ -21,6 +21,37 @@ LOGGER = logging.getLogger("reliability-test")
 
 
 class ReliabilityTests(unittest.TestCase):
+    def test_audio_errors_and_task_abort_do_not_trigger_gpu_fallback(self):
+        file = _video(Path("source.mp4"), 10)
+        gpu = GpuPlan(GpuMode.nvenc, "h264_nvenc", {"h264_nvenc"}, "test")
+        for abort in (False, True):
+            run = TaskRun("stop", "basic", LOGGER)
+            token = current_run.set(run)
+            def process(**kwargs):
+                if abort:
+                    run.abort_event.set()
+                raise CommandError("GPU stopped" if abort else
+                                   "[aost#0:1/aac @ 123] Non-monotonic DTS; current: 5105")
+            try:
+                with patch("videomerge.transcode.preprocess_file", side_effect=process) as execute:
+                    with self.assertRaises(CommandError):
+                        preprocess_group([file], Canvas(640, 360), 30,
+                                         CodecPlan("h264", "aac", "h264_nvenc", "aac"),
+                                         TOOLS, LOGGER, "black", 23, "medium", False, False, gpu_plan=gpu)
+                    self.assertEqual(execute.call_count, 1)
+            finally:
+                current_run.reset(token)
+
+    def test_audio_only_job_does_not_trigger_gpu_fallback(self):
+        file = replace(_video(Path("source.mkv"), 10), container="matroska", audio_codec="mp3")
+        gpu = GpuPlan(GpuMode.nvenc, "h264_nvenc", {"h264_nvenc"}, "test")
+        with patch("videomerge.transcode.preprocess_file", side_effect=CommandError("audio failed")) as execute:
+            with self.assertRaises(CommandError):
+                preprocess_group([file], Canvas(1280, 720), 30,
+                                 CodecPlan("h264", "aac", "h264_nvenc", "aac"),
+                                 TOOLS, LOGGER, "black", 23, "medium", False, False, gpu_plan=gpu)
+            self.assertEqual(execute.call_count, 1)
+
     def test_gpu_failure_retries_with_cpu_without_skipping_healthy_source(self):
         file = _video(Path("source.mp4"), 10)
         run = TaskRun("skip", "basic", LOGGER)

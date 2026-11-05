@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import concurrent.futures
 import logging
+import re
 import tempfile
 from collections import Counter
 from dataclasses import dataclass, replace
@@ -43,6 +44,20 @@ class PreprocessJob:
     action: str
     segment_action: str
     output_path: Path
+
+
+def is_audio_timestamp_failure(message: str) -> bool:
+    """Only attribute timestamp failures explicitly reported by an audio stream."""
+    for line in message.lower().splitlines():
+        if "[aac @" in line and "queue input is backward in time" in line:
+            return True
+        if re.search(r"\[aost#[^\]]+\]", line) and (
+            "non-monotonic dts" in line or "non monotonically increasing dts" in line
+        ):
+            return True
+        if re.search(r"non-monoton(?:ic|ous) dts in output stream 0:1\b", line):
+            return True
+    return False
 
 
 def preprocess_group(
@@ -178,7 +193,10 @@ def preprocess_group(
             path = execute()
         except CommandError as exc:
             from .reliability import is_system_failure
-            if gpu_plan is not None and gpu_plan.enabled and not is_system_failure(str(exc)):
+            if task_run and task_run.abort_event.is_set():
+                raise
+            if (gpu_plan is not None and gpu_plan.enabled and job.action == "transcode"
+                    and not is_system_failure(str(exc)) and not is_audio_timestamp_failure(str(exc))):
                 logger.warning("GPU processing failed for %s; retrying with CPU.", job.file.path)
                 try:
                     path = execute(True)
@@ -366,11 +384,52 @@ def preprocess_file(
     target_video_bitrate: int = 0,
     target_video_timescale: int = 0,
 ) -> Path:
+    options = dict(file=file, output_path=output_path, canvas=canvas, fps=fps,
+                   codec_plan=codec_plan, tools=tools, logger=logger, pad_color=pad_color,
+                   crf=crf, preset=preset, dry_run=dry_run, gpu_plan=gpu_plan,
+                   audio_target=audio_target, force_video_transcode=force_video_transcode,
+                   force_remux=force_remux, target_video_bitrate=target_video_bitrate,
+                   target_video_timescale=target_video_timescale)
+    try:
+        return _preprocess_file_once(**options)
+    except CommandError as exc:
+        from .reliability import current_run, is_system_failure
+        run = current_run.get()
+        if (not file.has_audio or not is_audio_timestamp_failure(str(exc))
+                or is_system_failure(str(exc)) or (run and run.abort_event.is_set())):
+            raise
+        logger.warning("Audio timestamp discontinuity in %s; retrying this input once with "
+                       "audio resampling and a continuous sample clock (video encoder unchanged).", file.path)
+        return _preprocess_file_once(**options, repair_audio_timestamps=True)
+
+
+def _preprocess_file_once(
+    file: VideoFile,
+    output_path: Path,
+    canvas: Canvas,
+    fps: float,
+    codec_plan: CodecPlan,
+    tools: ToolPaths,
+    logger: logging.Logger,
+    pad_color: str,
+    crf: int,
+    preset: str,
+    dry_run: bool,
+    gpu_plan: GpuPlan | None = None,
+    audio_target: AudioTarget | None = None,
+    force_video_transcode: bool = False,
+    force_remux: bool = False,
+    target_video_bitrate: int = 0,
+    target_video_timescale: int = 0,
+    repair_audio_timestamps: bool = False,
+) -> Path:
     audio_target = audio_target or choose_audio_target([file], codec_plan)
     video_action = choose_video_action(file, canvas, fps, codec_plan)
     if force_video_transcode:
         video_action = "transcode"
     audio_action = choose_audio_action(file, audio_target)
+    if repair_audio_timestamps:
+        audio_action = "transcode"
     if (
         not force_video_transcode
         and not force_remux
@@ -490,7 +549,13 @@ def preprocess_file(
             ]
         )
         if file.has_audio:
-            args.extend(["-af", "apad"])
+            audio_filter = "apad"
+            if repair_audio_timestamps:
+                # Preserve timeline gaps with silence/trim before rebuilding a monotonic
+                # encoder clock. Do not just ignore muxer errors or drop the audio track.
+                audio_filter = (f"aresample={audio_target.sample_rate}:async=1:first_pts=0,"
+                                "asetpts=N/SR/TB,apad")
+            args.extend(["-af", audio_filter])
     if not file.has_audio or audio_action != "copy":
         args.append("-shortest")
     if target_video_timescale > 0:
